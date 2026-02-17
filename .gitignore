@@ -1,0 +1,47 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.xlsx
+*.xls
+*.csv
+*.pdf
+# Large data (add to server separately or use !raw_data/**/*.xlsx to include)
+raw_data/
+
+# Cursor/IDE agents (optional - remove this line if you want to share agents)
+.cursor/
+
+# Streamlit config (in repo so Docker/deploy has theme)
+# .streamlit/  <- leave commented so .streamlit is committed
+
+# Environment variables (API keys, secrets)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Auth (user database - do not commit)
+abcover_users.db
+
+# Logs (audit trail logs - can be large)
+logs/

@@ -1,0 +1,25 @@
+# Conda environment for ABCover
+# Create: conda env create -f environment.yml
+# Activate: conda activate abcover
+# Then: pip install -r requirements.txt  (if you need exact versions from requirements.txt)
+
+name: abcover
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pandas>=2.0.0
+  - openpyxl>=3.1.0
+  - numpy>=1.24.0
+  - pip:
+    - streamlit>=1.28.0
+    - langchain>=0.3.0,<0.4
+    - langchain-openai>=0.3.0
+    - langchain-google-genai>=1.0.0
+    - langchain-community>=0.3.0,<0.4
+    - langgraph>=0.2.0
+    - python-dotenv>=1.0.0
+    - google-generativeai>=0.3.0
+    - bcrypt>=4.0.0
