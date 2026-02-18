@@ -1,0 +1,18 @@
+# ABCover Rating Engine - run with persistent database and logs
+# Usage: docker compose up --build   (then open http://localhost:8501)
+services:
+  app:
+    build: .
+    image: abcover
+    container_name: abcover-app
+    ports:
+      - "8501:8501"
+    env_file: .env
+    environment:
+      - APP_DATA_DIR=/app/data
+    volumes:
+      - abcover_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  abcover_data:

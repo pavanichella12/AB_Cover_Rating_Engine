@@ -16,6 +16,11 @@ try:
 except ImportError:
     ChatAnthropic = None
 
+try:
+    from langchain_aws import ChatBedrockConverse
+except ImportError:
+    ChatBedrockConverse = None
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 import os
@@ -36,8 +41,8 @@ class LLMAgentBase(ABC):
         
         Args:
             agent_name: Name of the agent
-            model_provider: "google" (free, default), "openai", or "anthropic"
-            model_name: Specific model name (e.g., "gemini-1.5-flash", "gemini-1.5-pro", "gpt-4", "claude-3-opus")
+            model_provider: "google" (free, default), "openai", "anthropic", or "bedrock"
+            model_name: Specific model name (e.g., "gemini-1.5-flash", "gpt-4", "anthropic.claude-3-5-sonnet-20241022-v2:0")
         """
         self.agent_name = agent_name
         self.model_provider = model_provider
@@ -80,8 +85,23 @@ class LLMAgentBase(ABC):
                 temperature=0.3,
                 google_api_key=api_key
             )
+        elif self.model_provider == "bedrock":
+            if ChatBedrockConverse is None:
+                raise ValueError(
+                    "langchain-aws is required for Bedrock. Install with: pip install langchain-aws"
+                )
+            region = (os.getenv("AWS_REGION") or "").strip() or "us-east-1"
+            model_id = model_name or "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            return ChatBedrockConverse(
+                model=model_id,
+                temperature=0.3,
+                region_name=region,
+            )
         else:
-            raise ValueError(f"Unsupported model provider: {self.model_provider}. Supported: 'google' (free), 'openai', 'anthropic'")
+            raise ValueError(
+                f"Unsupported model provider: {self.model_provider}. "
+                "Supported: 'google' (free), 'openai', 'anthropic', 'bedrock'"
+            )
     
     @abstractmethod
     def _get_system_prompt(self) -> str:
