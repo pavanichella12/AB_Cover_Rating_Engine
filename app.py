@@ -126,9 +126,13 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Main app (only when logged in)
 # ---------------------------------------------------------------------------
-# Initialize LangGraph orchestrator (with blackboard/state management)
+# Cache for column mapping (keyed by column names) - same columns = reuse AI result, no extra LLM call
+if "_column_mapping_cache" not in st.session_state:
+    st.session_state["_column_mapping_cache"] = {}
+
+# Orchestrator is created lazily (only when we have uploaded data) so the first page load is fast.
 if 'orchestrator' not in st.session_state:
-    st.session_state.orchestrator = LangGraphOrchestrator()
+    st.session_state.orchestrator = None
 
 # Initialize state (blackboard)
 if 'agent_state' not in st.session_state:
@@ -149,6 +153,7 @@ if 'agent_state' not in st.session_state:
         "column_display_names": {},
         "filters": {},
         "rating_inputs": {},
+        "use_quick_mapping": False,
         "processing_history": []
     }
 
@@ -190,9 +195,11 @@ if uploaded_file is not None:
     # Process file upload using orchestrator
     with st.spinner("Uploading and processing file..."):
         try:
+            # Lazy-init orchestrator (and Bedrock/LLM) only when first needed
+            if st.session_state.orchestrator is None:
+                st.session_state.orchestrator = LangGraphOrchestrator()
             # Update state with uploaded file
             st.session_state.agent_state["uploaded_file"] = uploaded_file
-            
             # Run upload node
             upload_result = st.session_state.orchestrator._upload_node(st.session_state.agent_state)
             
@@ -285,34 +292,60 @@ if not st.session_state.agent_state["raw_data"].empty:
     st.header("Step 2: Select Columns and Filter Rows")
     
     df_raw = st.session_state.agent_state["raw_data"]
-    
-    # Run DataAnalysisAgent to suggest column mapping (once per upload)
     raw_cols = tuple(df_raw.columns.tolist())
     analyzed_for = st.session_state.agent_state.get("analyzed_for_columns")
     if analyzed_for != raw_cols:
         st.session_state.agent_state["column_mapping_analyzed"] = False
         st.session_state.agent_state["analyzed_for_columns"] = None
+    
+    # Quick mapping = skip LLM, use fallback only (much faster)
+    use_quick = st.checkbox(
+        "Use quick mapping (faster, no AI – uses standard column names only)",
+        value=st.session_state.agent_state.get("use_quick_mapping", False),
+        key="use_quick_mapping_cb"
+    )
+    st.session_state.agent_state["use_quick_mapping"] = use_quick
+    
     if not st.session_state.agent_state.get("column_mapping_analyzed"):
-        with st.spinner("🤖 Agent analyzing columns and mapping to standard names..."):
-            try:
-                provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
-                model_name = (os.getenv("LLM_MODEL") or "").strip() or None
-                analysis_agent = DataAnalysisAgent(model_provider=provider, model_name=model_name)
-                suggested = analysis_agent.suggest_column_mapping(df_raw, STANDARD_COLUMNS)
-                if not suggested:
+        if use_quick:
+            suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
+            st.session_state.agent_state["suggested_column_map"] = suggested
+            st.session_state.agent_state["column_mapping_analyzed"] = True
+            st.session_state.agent_state["analyzed_for_columns"] = raw_cols
+            st.caption("Quick mapping applied. No AI used.")
+            st.rerun()
+        else:
+            # Check cache: same column set = reuse previous AI result (no LLM call)
+            cache = st.session_state["_column_mapping_cache"]
+            if raw_cols in cache:
+                suggested = cache[raw_cols]
+                st.session_state.agent_state["suggested_column_map"] = suggested
+                st.session_state.agent_state["column_mapping_analyzed"] = True
+                st.session_state.agent_state["analyzed_for_columns"] = raw_cols
+                st.caption("Column mapping loaded from cache (same file structure).")
+                st.rerun()
+            with st.spinner("🤖 Agent analyzing columns and mapping to standard names..."):
+                try:
+                    provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
+                    model_name = (os.getenv("LLM_MODEL") or "").strip() or None
+                    analysis_agent = DataAnalysisAgent(model_provider=provider, model_name=model_name)
+                    suggested = analysis_agent.suggest_column_mapping(df_raw, STANDARD_COLUMNS)
+                    if not suggested:
+                        suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
+                        if suggested:
+                            st.caption("Agent returned none; using fallback alias mapping.")
+                    st.session_state.agent_state["suggested_column_map"] = suggested
+                    st.session_state.agent_state["column_mapping_analyzed"] = True
+                    st.session_state.agent_state["analyzed_for_columns"] = raw_cols
+                    cache[raw_cols] = suggested  # cache for next time same columns are seen
+                except Exception as e:
                     suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
-                    if suggested:
-                        st.caption("Agent returned none; using fallback alias mapping.")
-                st.session_state.agent_state["suggested_column_map"] = suggested
-                st.session_state.agent_state["column_mapping_analyzed"] = True
-                st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-            except Exception as e:
-                suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
-                st.session_state.agent_state["suggested_column_map"] = suggested
-                st.session_state.agent_state["column_mapping_analyzed"] = True
-                st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-                st.warning(f"Agent error: {e}. Using fallback alias mapping.")
-        st.rerun()
+                    st.session_state.agent_state["suggested_column_map"] = suggested
+                    st.session_state.agent_state["column_mapping_analyzed"] = True
+                    st.session_state.agent_state["analyzed_for_columns"] = raw_cols
+                    cache[raw_cols] = suggested  # cache fallback too
+                    st.warning(f"Agent error: {e}. Using fallback alias mapping.")
+            st.rerun()
     
     # Column selection
     available_columns = df_raw.columns.tolist()
@@ -402,6 +435,8 @@ if not st.session_state.agent_state["raw_data"].empty:
         # Run select node
         with st.spinner("Selecting data..."):
             try:
+                if st.session_state.orchestrator is None:
+                    st.session_state.orchestrator = LangGraphOrchestrator()
                 select_state = st.session_state.agent_state.copy()
                 select_result = st.session_state.orchestrator._select_node(select_state)
                 st.session_state.agent_state.update(select_result)
@@ -452,6 +487,8 @@ if not st.session_state.agent_state["selected_data"].empty:
         with st.spinner("🤖 LLM analyzing data and reasoning about cleaning rules..."):
             try:
                 # Run clean node (LLM-powered)
+                if st.session_state.orchestrator is None:
+                    st.session_state.orchestrator = LangGraphOrchestrator()
                 clean_state = st.session_state.agent_state.copy()
                 clean_result = st.session_state.orchestrator._clean_node(clean_state)
                 st.session_state.agent_state.update(clean_result)
@@ -541,6 +578,8 @@ if not st.session_state.agent_state["cleaned_data"].empty:
         with st.spinner("🤖 LLM reasoning about calculations..."):
             try:
                 # Run calculate node (LLM-powered)
+                if st.session_state.orchestrator is None:
+                    st.session_state.orchestrator = LangGraphOrchestrator()
                 calc_state = st.session_state.agent_state.copy()
                 calc_result = st.session_state.orchestrator._calculate_node(calc_state)
                 st.session_state.agent_state.update(calc_result)
