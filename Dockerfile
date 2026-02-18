@@ -6,21 +6,21 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install dependencies first (better layer caching)
+# Upgrade pip and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt streamlit
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy app code and config
 COPY .streamlit/ .streamlit/
 COPY app.py auth.py audit.py add_user.py ./
 COPY agents/ agents/
 COPY abcover_logo.png ./
-COPY ANSWER_KEY_SMALL.csv ./
-# raw_data not in repo (large files); create dir for uploads at runtime
-RUN mkdir -p raw_data
+# raw_data and persistent data dir (for volume mount)
+RUN mkdir -p raw_data /app/data
 
 # Streamlit listens on all interfaces so AWS can reach it
 EXPOSE 8501
 
-# Run the app (env vars like GOOGLE_API_KEY must be set when you run the container)
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Run the app via python -m to avoid corrupted streamlit launcher script in container
+CMD ["python", "-m", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

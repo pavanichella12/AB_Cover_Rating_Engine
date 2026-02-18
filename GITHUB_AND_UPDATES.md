@@ -32,7 +32,7 @@ So: **no secrets, no venv, no DB, no logs** on GitHub. Only code, `requirements.
 
 ## 3. How to switch to a different LLM
 
-Your app already supports **Google (Gemini), OpenAI, and Anthropic**. You don’t change code for that—only **environment variables**.
+Your app already supports **Google (Gemini), OpenAI, Anthropic, and AWS Bedrock**. You don’t change code for that—only **environment variables**.
 
 - **Current (Google):**  
   `GOOGLE_API_KEY=...`  
@@ -48,10 +48,17 @@ Your app already supports **Google (Gemini), OpenAI, and Anthropic**. You don’
   `LLM_PROVIDER=anthropic`  
   `ANTHROPIC_API_KEY=...`
 
-The code in `agents/llm_agent_base.py` and `agents/orchestrator_langgraph.py` reads `LLM_PROVIDER` and the right API key. So:
+- **Switch to AWS Bedrock (Claude 3.5 Sonnet):**  
+  Set on AWS (or in `.env` locally):  
+  `LLM_PROVIDER=bedrock`  
+  `LLM_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0` (optional; this is the default)  
+  `AWS_REGION=us-east-1` (optional; default is `us-east-1`)  
+  AWS credentials: use an **IAM role** on EC2/ECS/Lambda, or set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Ensure the role/user has `bedrock:InvokeModel` and model access enabled in the Bedrock console.
 
-1. Add the new API key in AWS (e.g. App Runner / EC2 environment variables).
-2. Set `LLM_PROVIDER=openai` or `LLM_PROVIDER=anthropic`.
+The code in `agents/llm_agent_base.py` and `agents/orchestrator_langgraph.py` reads `LLM_PROVIDER` and the right API key (or AWS credentials for Bedrock). So:
+
+1. Add the new API key in AWS (e.g. App Runner / EC2 environment variables), or for Bedrock attach an IAM role with Bedrock access.
+2. Set `LLM_PROVIDER=openai`, `LLM_PROVIDER=anthropic`, or `LLM_PROVIDER=bedrock`.
 3. Redeploy or restart the app (so it picks up the new env vars).
 
 No need to push new code unless you add a new provider in code.
