@@ -1,6 +1,13 @@
 [server]
 # Max file upload size in MB (default is 200)
 maxUploadSize = 500
+# Production: don't watch files (faster, no unnecessary reloads)
+runOnSave = false
+# Headless (no browser open on server)
+headless = true
+# Reduce reconnection issues
+enableCORS = false
+enableXsrfProtection = true
 
 [theme]
 base = "dark"

@@ -91,7 +91,7 @@ class LLMAgentBase(ABC):
                     "langchain-aws is required for Bedrock. Install with: pip install langchain-aws"
                 )
             region = (os.getenv("AWS_REGION") or "").strip() or "us-east-1"
-            model_id = model_name or "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            model_id = model_name or "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
             return ChatBedrockConverse(
                 model=model_id,
                 temperature=0.3,

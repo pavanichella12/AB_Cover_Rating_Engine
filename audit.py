@@ -14,9 +14,10 @@ from typing import Optional, Any
 # Use same DB as auth
 from auth import get_connection
 
-# Log directory and file
+# Log directory and file; use APP_DATA_DIR in Docker for persistent logs
 _DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.path.join(_DIR, "logs")
+_DATA_DIR = os.environ.get("APP_DATA_DIR", _DIR)
+LOG_DIR = os.path.join(_DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
 _logger_initialized = False

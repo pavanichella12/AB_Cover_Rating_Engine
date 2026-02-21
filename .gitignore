@@ -25,8 +25,20 @@ Thumbs.db
 *.xls
 *.csv
 *.pdf
-# Large data (add to server separately or use !raw_data/**/*.xlsx to include)
+
+# Data and exploration (not needed in repo)
 raw_data/
+EDA/
+ANSWER_KEY_SMALL.csv
+
+# Test and validation scripts (not needed for deploy)
+test_*.py
+*_test.py
+check_*.py
+validate_*.py
+compare_*.py
+debug_*.py
+verify_*.py
 
 # Cursor/IDE agents (optional - remove this line if you want to share agents)
 .cursor/

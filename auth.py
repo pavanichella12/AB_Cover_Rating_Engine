@@ -11,9 +11,10 @@ from typing import Optional
 
 import bcrypt
 
-# Database path (in project directory; add abcover_users.db to .gitignore)
+# Database path; use APP_DATA_DIR in Docker so we can mount a persistent volume
 _DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(_DIR, "abcover_users.db")
+_DATA_DIR = os.environ.get("APP_DATA_DIR", _DIR)
+DB_PATH = os.path.join(_DATA_DIR, "abcover_users.db")
 
 
 def get_connection():

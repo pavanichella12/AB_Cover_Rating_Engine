@@ -26,10 +26,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# Dark theme CSS
+# Dark theme CSS (system fonts first so page loads fast; Google Fonts load async)
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Bodoni+Moda:ital,wght@0,700;1,700&display=swap');
+/* Prefer system fonts so first paint is fast; optional Google Fonts load later */
 /* Logo box - light background so logo is visible on dark theme */
 .abcover-logo-box {
     background: #ffffff;
@@ -48,7 +48,7 @@ st.markdown("""
     margin-top: 0.75rem;
 }
 /* ABCover Rating Engine branding font */
-h1, .abcover-brand { font-family: 'Boulder', 'Bodoni Moda', Georgia, serif !important; }
+h1, .abcover-brand { font-family: 'Bodoni Moda', Georgia, serif !important; }
 /* Headers for dark theme */
 h2, h3 {
     color: #fafafa !important;
@@ -117,6 +117,17 @@ if not st.session_state.logged_in:
 # Logout in sidebar
 with st.sidebar:
     st.caption(f"Logged in as **{st.session_state.user_email}**")
+    # Show which LLM we're using (from env)
+    _provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
+    _model = (os.getenv("LLM_MODEL") or "").strip() or None
+    if _provider == "bedrock":
+        st.caption("🤖 **LLM:** Bedrock / Claude 3.5 Sonnet")
+    elif _provider == "anthropic":
+        st.caption(f"🤖 **LLM:** Anthropic / {_model or 'Claude'}")
+    elif _provider == "openai":
+        st.caption(f"🤖 **LLM:** OpenAI / {_model or 'GPT-4'}")
+    else:
+        st.caption(f"🤖 **LLM:** Google / {_model or 'Gemini'}")
     if st.button("Log out"):
         log_logout(st.session_state.user_email or "")
         st.session_state.logged_in = False
@@ -298,54 +309,38 @@ if not st.session_state.agent_state["raw_data"].empty:
         st.session_state.agent_state["column_mapping_analyzed"] = False
         st.session_state.agent_state["analyzed_for_columns"] = None
     
-    # Quick mapping = skip LLM, use fallback only (much faster)
-    use_quick = st.checkbox(
-        "Use quick mapping (faster, no AI – uses standard column names only)",
-        value=st.session_state.agent_state.get("use_quick_mapping", False),
-        key="use_quick_mapping_cb"
-    )
-    st.session_state.agent_state["use_quick_mapping"] = use_quick
-    
     if not st.session_state.agent_state.get("column_mapping_analyzed"):
-        if use_quick:
-            suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
+        # Check cache: same column set = reuse previous AI result (no LLM call)
+        cache = st.session_state["_column_mapping_cache"]
+        if raw_cols in cache:
+            suggested = cache[raw_cols]
             st.session_state.agent_state["suggested_column_map"] = suggested
             st.session_state.agent_state["column_mapping_analyzed"] = True
             st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-            st.caption("Quick mapping applied. No AI used.")
+            st.caption("Column mapping loaded from cache (same file structure).")
             st.rerun()
-        else:
-            # Check cache: same column set = reuse previous AI result (no LLM call)
-            cache = st.session_state["_column_mapping_cache"]
-            if raw_cols in cache:
-                suggested = cache[raw_cols]
+        with st.spinner("🤖 Agent analyzing columns and mapping to standard names..."):
+            try:
+                provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
+                model_name = (os.getenv("LLM_MODEL") or "").strip() or None
+                analysis_agent = DataAnalysisAgent(model_provider=provider, model_name=model_name)
+                suggested = analysis_agent.suggest_column_mapping(df_raw, STANDARD_COLUMNS)
+                if not suggested:
+                    suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
+                    if suggested:
+                        st.caption("Agent returned none; using fallback alias mapping.")
                 st.session_state.agent_state["suggested_column_map"] = suggested
                 st.session_state.agent_state["column_mapping_analyzed"] = True
                 st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-                st.caption("Column mapping loaded from cache (same file structure).")
-                st.rerun()
-            with st.spinner("🤖 Agent analyzing columns and mapping to standard names..."):
-                try:
-                    provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
-                    model_name = (os.getenv("LLM_MODEL") or "").strip() or None
-                    analysis_agent = DataAnalysisAgent(model_provider=provider, model_name=model_name)
-                    suggested = analysis_agent.suggest_column_mapping(df_raw, STANDARD_COLUMNS)
-                    if not suggested:
-                        suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
-                        if suggested:
-                            st.caption("Agent returned none; using fallback alias mapping.")
-                    st.session_state.agent_state["suggested_column_map"] = suggested
-                    st.session_state.agent_state["column_mapping_analyzed"] = True
-                    st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-                    cache[raw_cols] = suggested  # cache for next time same columns are seen
-                except Exception as e:
-                    suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
-                    st.session_state.agent_state["suggested_column_map"] = suggested
-                    st.session_state.agent_state["column_mapping_analyzed"] = True
-                    st.session_state.agent_state["analyzed_for_columns"] = raw_cols
-                    cache[raw_cols] = suggested  # cache fallback too
-                    st.warning(f"Agent error: {e}. Using fallback alias mapping.")
-            st.rerun()
+                cache[raw_cols] = suggested  # cache for next time same columns are seen
+            except Exception as e:
+                suggested = _fallback_column_mapping(df_raw, STANDARD_COLUMNS)
+                st.session_state.agent_state["suggested_column_map"] = suggested
+                st.session_state.agent_state["column_mapping_analyzed"] = True
+                st.session_state.agent_state["analyzed_for_columns"] = raw_cols
+                cache[raw_cols] = suggested  # cache fallback too
+                st.warning(f"Agent error: {e}. Using fallback alias mapping.")
+        st.rerun()
     
     # Column selection
     available_columns = df_raw.columns.tolist()
@@ -484,7 +479,9 @@ if not st.session_state.agent_state["selected_data"].empty:
         # Update state
         st.session_state.agent_state["school_name"] = school_name
         
-        with st.spinner("🤖 LLM analyzing data and reasoning about cleaning rules..."):
+        _provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
+        _llm_label = "Bedrock (Claude Sonnet)" if _provider == "bedrock" else (_provider if _provider else "LLM")
+        with st.spinner(f"🤖 Calling {_llm_label} — analyzing data and cleaning rules (may take 1–2 min)..."):
             try:
                 # Run clean node (LLM-powered)
                 if st.session_state.orchestrator is None:
@@ -507,11 +504,6 @@ if not st.session_state.agent_state["selected_data"].empty:
                         with st.expander("📊 Preview cleaned data (Standard name ← School name)", expanded=False):
                             st.caption("Columns show: **Our standard name** (school column name)")
                             st.dataframe(df_show.head(100), use_container_width=True, hide_index=True)
-                    # Show LLM reasoning
-                    if st.session_state.agent_state.get("cleaning_reasoning"):
-                        with st.expander("🧠 LLM Reasoning (Why these cleaning rules?)", expanded=True):
-                            st.write(st.session_state.agent_state["cleaning_reasoning"])
-                    
                     # Show cleaning stats (we need to get this from the agent)
                     df_cleaned = st.session_state.agent_state["cleaned_data"]
                     df_selected = st.session_state.agent_state["selected_data"]
@@ -575,7 +567,9 @@ if not st.session_state.agent_state["cleaned_data"].empty:
             "school_year_days": int(school_year_days) if school_year_days else None
         }
         
-        with st.spinner("🤖 LLM reasoning about calculations..."):
+        _provider_calc = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
+        _llm_label_calc = "Bedrock (Claude Sonnet)" if _provider_calc == "bedrock" else (_provider_calc if _provider_calc else "LLM")
+        with st.spinner(f"🤖 Calling {_llm_label_calc} — reasoning about calculations (may take 1–2 min)..."):
             try:
                 # Run calculate node (LLM-powered)
                 if st.session_state.orchestrator is None:
@@ -601,15 +595,6 @@ if not st.session_state.agent_state["cleaned_data"].empty:
                         total_premium=res.get("total_premium"),
                     )
                     logger.info("Calculate success: user=%s premium=%s", st.session_state.get("user_email"), res.get("total_premium"))
-                    # Show LLM reasoning
-                    if st.session_state.agent_state.get("calculation_reasoning"):
-                        with st.expander("🧠 LLM Calculation Reasoning", expanded=True):
-                            reasoning = st.session_state.agent_state["calculation_reasoning"]
-                            if isinstance(reasoning, dict):
-                                st.write(reasoning.get("reasoning", "No reasoning available"))
-                            else:
-                                st.write(reasoning)
-                    
                     # Show blackboard context
                     with st.expander("📋 Blackboard State (Full Context)", expanded=False):
                         state = st.session_state.agent_state
@@ -756,36 +741,33 @@ if st.session_state.agent_state.get("rating_results"):
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Staff in CC Range", f"{results.get('num_staff_cc_range', 0):,}")
-        st.caption(f"(Days > {deductible} and ≤ {cc_maximum})")
     with col2:
         st.metric("Total CC Days", f"{results.get('total_cc_days', 0):,.2f}")
     with col3:
         st.metric("Replacement Cost × CC Days", f"${results.get('replacement_cost_cc', 0):,.2f}")
     
-    # High Claimant Metrics
+    # High Claimant Metrics (no reasoning caption)
     st.subheader("⚠️ High Claimant Metrics")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("High Claimant Staff", f"{results.get('num_high_claimant', 0):,}")
-        st.caption(f"(Days > {cc_maximum})")
     with col2:
         st.metric("Excess Days", f"{results.get('excess_days', 0):,.2f}")
     with col3:
         st.metric("High Claimant Cost", f"${results.get('high_claimant_cost', 0):,.2f}")
     
-    # Premium Calculation
+    # Premium Calculation – full numbers visible (no truncation)
     st.subheader("💰 Premium Calculation")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Replacement Cost (CC)", f"${results.get('replacement_cost_cc', 0):,.2f}")
-    with col2:
-        st.metric("ARK Commission", f"${results.get('ark_commission', 0):,.2f}")
-    with col3:
-        st.metric("ABCover Commission", f"${results.get('abcover_commission', 0):,.2f}")
-    with col4:
-        st.metric("TOTAL PREMIUM", f"${results.get('total_premium', 0):,.2f}", delta=None)
-    # Show total premium full-width so the full value is always visible (no truncation)
+    rc_cc = results.get("replacement_cost_cc", 0)
+    ark = results.get("ark_commission", 0)
+    abcover = results.get("abcover_commission", 0)
     total_premium_val = results.get("total_premium", 0)
+    st.markdown(f"""
+    - **Replacement Cost (CC):** ${rc_cc:,.2f}  
+    - **ARK Commission:** ${ark:,.2f}  
+    - **ABCover Commission:** ${abcover:,.2f}  
+    - **TOTAL PREMIUM:** ${total_premium_val:,.2f}
+    """)
     st.success(f"**Total premium:** ${total_premium_val:,.2f}")
     
     # Summary table
