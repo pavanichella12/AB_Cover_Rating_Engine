@@ -1,6 +1,11 @@
 """
 RatingEngineAgentLLM - LLM-powered agent for Rating Engine calculations
 Responsibility: Reason about calculations, adapt to school-specific logic
+
+PERFORMANCE: We never send full row-level data to the LLM. All calculations (totals,
+counts, distributions) are done in pandas; we send only aggregated statistics
+(totals, averages, distribution counts) for reasoning and explanation. This keeps
+token size small, latency low, and cost down.
 """
 
 import pandas as pd
@@ -167,7 +172,7 @@ Rating Engine Calculation Logic (from Excel Template):
         Returns:
             Dictionary with reasoning and recommended approach
         """
-        # Prepare data summary
+        # Prepare data summary only (aggregates from pandas — never raw teacher_days rows)
         total_teachers = len(teacher_days)
         total_days = teacher_days['Total_Days'].sum()
         avg_days = teacher_days['Total_Days'].mean()

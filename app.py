@@ -6,6 +6,7 @@ Login: SQLite + hashed passwords. Users with @abcover.org email can create an ac
 
 import base64
 import os
+from typing import Optional
 import streamlit as st
 import pandas as pd
 from agents import LangGraphOrchestrator, AgentState, DataAnalysisAgent
@@ -17,6 +18,21 @@ setup_logging()
 init_audit_db()
 init_login_events_db()
 logger = get_logger()
+
+# Display: avoid PyArrow errors (e.g. "$150.00" converted to number) and cap large tables
+DISPLAY_MAX_ROWS = 5000
+
+
+def _dataframe_safe_for_display(df: pd.DataFrame, max_rows: Optional[int] = None) -> pd.DataFrame:
+    """Return a copy safe for st.dataframe: all columns as string so PyArrow never fails (e.g. '$140.00' -> str). Optionally cap rows."""
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        return df
+    copy = df.copy()
+    for col in copy.columns:
+        copy[col] = copy[col].astype(str)
+    if max_rows is not None and len(copy) > max_rows:
+        copy = copy.head(max_rows)
+    return copy
 
 # Page configuration (must be first Streamlit command)
 _LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "abcover_logo.png")
@@ -447,7 +463,12 @@ if not st.session_state.agent_state["raw_data"].empty:
                         df_show = df_selected.rename(columns={k: v for k, v in disp.items() if k in df_selected.columns})
                         with st.expander("📊 Preview (Standard name ← School name)", expanded=False):
                             st.caption("Columns show: **Our standard name** (school column name)")
-                            st.dataframe(df_show.head(100), use_container_width=True, hide_index=True)
+                            total = len(df_show)
+                            preview = _dataframe_safe_for_display(df_show, max_rows=DISPLAY_MAX_ROWS)
+                            st.dataframe(preview, width="stretch", hide_index=True)
+                            if total > DISPLAY_MAX_ROWS:
+                                st.caption(f"Showing first {DISPLAY_MAX_ROWS:,} of {total:,} rows.")
+                            st.download_button("Download full selected data (CSV)", df_show.to_csv(index=False).encode("utf-8"), file_name="selected_data.csv", mime="text/csv", key="dl_selected")
                     # Show blackboard context
                     with st.expander("📋 Blackboard State", expanded=False):
                         st.write("**Raw Data:** Available")
@@ -503,7 +524,12 @@ if not st.session_state.agent_state["selected_data"].empty:
                         df_show = df_cleaned.rename(columns={k: v for k, v in disp.items() if k in df_cleaned.columns})
                         with st.expander("📊 Preview cleaned data (Standard name ← School name)", expanded=False):
                             st.caption("Columns show: **Our standard name** (school column name)")
-                            st.dataframe(df_show.head(100), use_container_width=True, hide_index=True)
+                            total = len(df_show)
+                            preview = _dataframe_safe_for_display(df_show, max_rows=DISPLAY_MAX_ROWS)
+                            st.dataframe(preview, width="stretch", hide_index=True)
+                            if total > DISPLAY_MAX_ROWS:
+                                st.caption(f"Showing first {DISPLAY_MAX_ROWS:,} of {total:,} rows.")
+                            st.download_button("Download full cleaned data (CSV)", df_show.to_csv(index=False).encode("utf-8"), file_name="cleaned_data.csv", mime="text/csv", key="dl_cleaned")
                     # Show cleaning stats (we need to get this from the agent)
                     df_cleaned = st.session_state.agent_state["cleaned_data"]
                     df_selected = st.session_state.agent_state["selected_data"]
@@ -685,7 +711,7 @@ if st.session_state.agent_state.get("rating_results"):
                 "CC Max (Days)": cc_days
             })
         
-        st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+        st.dataframe(_dataframe_safe_for_display(pd.DataFrame(table_data)), width="stretch", hide_index=True)
         st.info(f"📊 **Overall Totals (All School Years):** {results.get('overall_total_staff', 0):,} staff, {results.get('overall_total_absences', 0):,.2f} absences, ${results.get('overall_total_replacement_cost', 0):,.2f} total replacement cost")
         with st.expander("❓ How are these numbers calculated? How do I verify?"):
             st.markdown("""
@@ -722,7 +748,7 @@ if st.session_state.agent_state.get("rating_results"):
             with st.expander("📋 CC Range Staff Details (How CC Days are Calculated)", expanded=False):
                 cc_details = results["cc_range_details"]
                 if len(cc_details) > 0:
-                    st.dataframe(pd.DataFrame(cc_details), use_container_width=True, hide_index=True)
+                    st.dataframe(_dataframe_safe_for_display(pd.DataFrame(cc_details)), width="stretch", hide_index=True)
                     st.caption(f"Total CC Days: {results.get('total_cc_days', 0):.2f}")
                 else:
                     st.write("No staff in CC range.")
@@ -730,7 +756,7 @@ if st.session_state.agent_state.get("rating_results"):
             with st.expander("⚠️ High Claimant Staff Details (How Excess Days are Calculated)", expanded=False):
                 hc_details = results["high_claimant_details"]
                 if len(hc_details) > 0:
-                    st.dataframe(pd.DataFrame(hc_details), use_container_width=True, hide_index=True)
+                    st.dataframe(_dataframe_safe_for_display(pd.DataFrame(hc_details)), width="stretch", hide_index=True)
                     st.caption(f"Total Excess Days: {results.get('excess_days', 0):.2f}")
                 else:
                     st.write("No high claimant staff.")
@@ -788,7 +814,7 @@ if st.session_state.agent_state.get("rating_results"):
             school_year_days
         ]
     }
-    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+    st.dataframe(_dataframe_safe_for_display(pd.DataFrame(summary_data)), width="stretch", hide_index=True)
     
     # Show processing history
     with st.expander("📜 Processing History (Blackboard)", expanded=False):

@@ -42,7 +42,7 @@ class LLMAgentBase(ABC):
         Args:
             agent_name: Name of the agent
             model_provider: "google" (free, default), "openai", "anthropic", or "bedrock"
-            model_name: Specific model name (e.g., "gemini-1.5-flash", "gpt-4", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+            model_name: Specific model name (e.g., "gemini-1.5-flash", "gpt-4"; for Bedrock use inference profile ID like "us.anthropic.claude-3-5-sonnet-20241022-v2:0")
         """
         self.agent_name = agent_name
         self.model_provider = model_provider
@@ -91,6 +91,7 @@ class LLMAgentBase(ABC):
                     "langchain-aws is required for Bedrock. Install with: pip install langchain-aws"
                 )
             region = (os.getenv("AWS_REGION") or "").strip() or "us-east-1"
+            # Use inference profile ID (us.*) for on-demand; raw model ID causes ValidationException
             model_id = model_name or "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
             return ChatBedrockConverse(
                 model=model_id,

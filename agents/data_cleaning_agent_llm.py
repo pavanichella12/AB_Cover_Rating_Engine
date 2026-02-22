@@ -1,12 +1,22 @@
 """
 DataCleaningAgentLLM - LLM-powered agent for data cleaning
 Responsibility: Reason about cleaning rules, adapt to school-specific patterns
+
+PERFORMANCE: We never send full row-level data to the LLM. We send only aggregated
+metrics (counts, value_counts, sample rows, date range). LLMs are for reasoning on
+summaries; pandas does the heavy data crunching. This keeps token size small, latency
+low, and cost down.
 """
 
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 from .llm_agent_base import LLMAgentBase
 import json
+
+# Cap categories sent to LLM so prompts stay bounded (e.g. top 50 employee types)
+_MAX_CATEGORIES_FOR_LLM = 50
+_SAMPLE_ROWS_FOR_LLM = 5
+_DATE_MISMATCH_SAMPLE = 20
 
 
 class DataCleaningAgentLLM(LLMAgentBase):
@@ -101,29 +111,35 @@ Respond in JSON format with your analysis and suggested rules."""
         Returns:
             Dictionary with reasoning and suggested rules
         """
-        # Prepare data summary for LLM
+        # Prepare data summary for LLM (aggregates + small sample only — never full dataframe)
+        def _top_counts(series, n=_MAX_CATEGORIES_FOR_LLM):
+            if series is None or series.empty:
+                return {}
+            vc = series.value_counts()
+            return vc.head(n).to_dict()
+
         data_summary = {
             "rows": len(df),
             "columns": df.columns.tolist(),
-            "sample_data": df.head(5).to_dict('records') if len(df) > 0 else [],
-            "employee_types": df['Employee Type'].value_counts().to_dict() if 'Employee Type' in df.columns else {},
-            "filled_status": df['Filled'].value_counts().to_dict() if 'Filled' in df.columns else {},
-            "absence_types": df['Absence Type'].value_counts().to_dict() if 'Absence Type' in df.columns else {},
+            "sample_data": df.head(_SAMPLE_ROWS_FOR_LLM).to_dict("records") if len(df) > 0 else [],
+            "employee_types": _top_counts(df["Employee Type"]) if "Employee Type" in df.columns else {},
+            "filled_status": _top_counts(df["Filled"]) if "Filled" in df.columns else {},
+            "absence_types": _top_counts(df["Absence Type"]) if "Absence Type" in df.columns else {},
             "missing_values": df.isnull().sum().to_dict(),
         }
         
-        # Add school year and date information for Rule 3 validation
+        # Add school year and date information for Rule 3 validation (aggregates only)
         if 'School Year' in df.columns and 'Date' in df.columns:
-            school_years = df['School Year'].value_counts().to_dict()
+            school_years = _top_counts(df['School Year'], n=20)
             data_summary["school_years"] = school_years
             data_summary["date_range"] = {
                 "min": str(df['Date'].min()) if not df['Date'].isna().all() else None,
                 "max": str(df['Date'].max()) if not df['Date'].isna().all() else None
             }
             
-            # Check for potential date mismatches (sample check)
+            # Check for potential date mismatches (small sample only — never full dataset)
             date_mismatches = []
-            sample_size = min(100, len(df))  # Check sample for performance
+            sample_size = min(_DATE_MISMATCH_SAMPLE, len(df))
             for idx, row in df.head(sample_size).iterrows():
                 school_year = row.get('School Year')
                 date = row.get('Date')
@@ -142,7 +158,7 @@ Respond in JSON format with your analysis and suggested rules."""
                         pass
             
             if date_mismatches:
-                data_summary["date_validation_issues"] = date_mismatches[:10]  # Limit to 10 examples
+                data_summary["date_validation_issues"] = date_mismatches[:10]
         
         # Add blackboard context if available
         context_info = ""

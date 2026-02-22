@@ -51,9 +51,9 @@ Your app already supports **Google (Gemini), OpenAI, Anthropic, and AWS Bedrock*
 - **Switch to AWS Bedrock (Claude 3.5 Sonnet):**  
   Set on AWS (or in `.env` locally):  
   `LLM_PROVIDER=bedrock`  
-  `LLM_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0` (optional; this is the default)  
+  `LLM_MODEL=us.anthropic.claude-3-5-sonnet-20241022-v2:0` (optional; this is the default — use this **inference profile ID**, not the raw model ID, to avoid "on-demand throughput isn't supported")  
   `AWS_REGION=us-east-1` (optional; default is `us-east-1`)  
-  AWS credentials: use an **IAM role** on EC2/ECS/Lambda, or set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Ensure the role/user has `bedrock:InvokeModel` and model access enabled in the Bedrock console.
+  AWS credentials: use an **IAM role** on EC2/ECS/Lambda, or set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Ensure the role/user has `bedrock:InvokeModel` on the **inference profile** (e.g. resource `arn:aws:bedrock:us-east-1:ACCOUNT:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0` or use a wildcard for inference profiles). Model access must be enabled in the Bedrock console.
 
 The code in `agents/llm_agent_base.py` and `agents/orchestrator_langgraph.py` reads `LLM_PROVIDER` and the right API key (or AWS credentials for Bedrock). So:
 
@@ -90,3 +90,31 @@ Same idea for **any** change (new feature, bug fix, UI, logic):
      (You can put those commands in a small script so “update” = `./redeploy.sh`.)
 
 So: **update code → push to GitHub → AWS either auto-deploys or you pull + rebuild + restart.** No need to redo the whole deployment from scratch.
+
+---
+
+## 5. CI/CD with GitHub Actions (auto deploy on push)
+
+The repo includes a workflow that **builds the Docker image, pushes to ECR, and updates ECS** when you push to `main`. No need to run `docker build` and `aws ecs update-service` by hand.
+
+### One-time setup: add GitHub secrets
+
+1. On GitHub, open your repo → **Settings** → **Secrets and variables** → **Actions**.
+2. Click **New repository secret** and add:
+   - **Name:** `AWS_ACCESS_KEY_ID`  
+     **Value:** Your IAM user’s Access Key ID (e.g. the one that can push to ECR and update ECS).
+   - **Name:** `AWS_SECRET_ACCESS_KEY`  
+     **Value:** That key’s Secret Access Key (no spaces, no `AWS_SECRET_ACCESS_KEY=` in front).
+
+The IAM user must have:
+- Permission to push to your ECR (public) repo.
+- Permission to run `ecs:UpdateService` on your cluster/service.
+
+### How it runs
+
+- **Automatic:** Every push to the `main` branch runs the workflow: build image → push to `public.ecr.aws/g8m5c8i1/abcover:latest` → force new ECS deployment.
+- **Manual:** In the repo go to **Actions** → **Build and Deploy to ECS** → **Run workflow**.
+
+### If your default branch is not `main`
+
+Edit `.github/workflows/deploy.yml` and change `branches: [main]` to your branch name (e.g. `master`).

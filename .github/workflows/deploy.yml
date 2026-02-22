@@ -1,0 +1,47 @@
+# CI/CD: On push to main, build Docker image, push to ECR, and update ECS service.
+name: Build and Deploy to ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual run from Actions tab
+
+env:
+  AWS_REGION: us-east-1
+  ECR_PUBLIC_REGISTRY: public.ecr.aws/g8m5c8i1
+  ECR_IMAGE: public.ecr.aws/g8m5c8i1/abcover
+  ECS_CLUSTER: abcover-cluster
+  ECS_SERVICE: abcover-app-service-xnu4i50r
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR Public
+        run: |
+          aws ecr-public get-login-password --region ${{ env.AWS_REGION }} | \
+          docker login --username AWS --password-stdin ${{ env.ECR_PUBLIC_REGISTRY }}
+
+      - name: Build, tag, and push image
+        run: |
+          docker build -t ${{ env.ECR_IMAGE }}:latest .
+          docker push ${{ env.ECR_IMAGE }}:latest
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}

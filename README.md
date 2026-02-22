@@ -95,6 +95,15 @@ Then open http://localhost:8501. Use **Create account** (with an @abcover.org em
 - Adapts calculation approach based on data characteristics
 - Explains calculation decisions
 
+## Performance: LLMs and large data
+
+LLMs (e.g. via Bedrock) do not process dataframes natively; sending raw row-level data would mean huge token counts, high latency, and cost. The app **never** sends full datasets to the LLM. Instead:
+
+- **Pandas** does all heavy data work: aggregation, totals, counts, distributions, cleaning rules application, and premium calculations.
+- **LLMs** receive only **summarized inputs**: row counts, value counts (capped), small row samples (e.g. 5 rows), date ranges, and pre-computed stats (e.g. teachers below deductible, in CC range, high claimant). The LLM reasons and explains; it does not crunch 300k+ rows.
+
+This keeps token size small, inference fast, and cost low.
+
 ## Why LLM-Powered?
 
 Different schools may have:

@@ -16,6 +16,46 @@ from .rating_engine_agent_llm import RatingEngineAgentLLM
 
 load_dotenv()
 
+# Common date formats in school absence exports (try these first for fast single-pass parse)
+_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%d/%m/%Y",
+    "%Y/%m/%d",
+    "%B %d, %Y",  # July 1, 2020
+    "%b %d, %Y",  # Jul 1, 2020
+    "%m/%d/%y",
+    "%d-%b-%Y",
+]
+
+
+def _parse_date_series_fast(ser: pd.Series) -> pd.Series:
+    """
+    Parse a series to datetime using explicit formats when possible to avoid
+    per-element dateutil fallback (slow on large data). Only use for the real
+    absence 'Date' column, not Hire Date or other date columns.
+    """
+    if ser.empty:
+        return pd.to_datetime(ser, errors="coerce")
+    if pd.api.types.is_datetime64_any_dtype(ser):
+        return ser
+    # Try each format; use the one that parses the most non-null values
+    best = None
+    best_count = -1
+    for fmt in _DATE_FORMATS:
+        try:
+            parsed = pd.to_datetime(ser, format=fmt, errors="coerce")
+            count = parsed.notna().sum()
+            if count > best_count:
+                best_count = count
+                best = parsed
+        except (ValueError, TypeError):
+            continue
+    if best is not None and best_count > 0:
+        return best
+    return pd.to_datetime(ser, errors="coerce")
+
 
 class AgentState(TypedDict, total=False):
     """
@@ -115,19 +155,26 @@ class LangGraphOrchestrator:
             if not cols:
                 raise ValueError("No selected columns found in data.")
             df = df[cols].copy()
-            # Apply column mapping (rename to standard names; derive School Year from Date when mapped)
+            # Apply column mapping (rename to standard names; derive School Year only from real "Date" column)
+            # Strictly only the absence "Date" column is used for date parsing; not Hire Date or other date columns.
             if column_map:
                 rename_map = {}
                 for orig, standard in column_map.items():
                     if orig not in df.columns or not standard or standard == "Keep as-is":
                         continue
                     if standard == "School Year":
-                        try:
-                            dates = pd.to_datetime(df[orig], errors="coerce")
-                            year_start = dates.dt.year.where(dates.dt.month >= 7, dates.dt.year - 1)
-                            df["School Year"] = year_start.astype(str) + "-" + (year_start + 1).astype(str)
-                            df = df.drop(columns=[orig], errors="ignore")
-                        except Exception:
+                        orig_normalized = str(orig).strip().lower()
+                        if orig_normalized == "date":
+                            # Only derive School Year from the real absence Date column (fast parse)
+                            try:
+                                dates = _parse_date_series_fast(df[orig])
+                                year_start = dates.dt.year.where(dates.dt.month >= 7, dates.dt.year - 1)
+                                df["School Year"] = year_start.astype(str) + "-" + (year_start + 1).astype(str)
+                                df = df.drop(columns=[orig], errors="ignore")
+                            except Exception:
+                                rename_map[orig] = standard
+                        else:
+                            # Other columns mapped to School Year (e.g. already "School Year", or Hire Date): just rename
                             rename_map[orig] = standard
                     else:
                         rename_map[orig] = standard
@@ -225,13 +272,13 @@ class LangGraphOrchestrator:
 
     @staticmethod
     def _derive_school_year_from_date(df: pd.DataFrame) -> pd.DataFrame:
-        """If 'School Year' is missing but 'Date' exists, derive School Year (July 1 - June 30)."""
+        """If 'School Year' is missing but 'Date' exists, derive School Year (July 1 - June 30). Uses fast date parse (Date = absence date only)."""
         if df is None or df.empty or 'School Year' in df.columns:
             return df
         if 'Date' not in df.columns:
             return df
         try:
-            dates = pd.to_datetime(df['Date'], errors='coerce')
+            dates = _parse_date_series_fast(df['Date'])
             # July 1+ -> current year start; before July -> previous year start
             year_start = dates.dt.year.where(dates.dt.month >= 7, dates.dt.year - 1)
             year_end = year_start + 1
