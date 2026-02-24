@@ -261,6 +261,8 @@ if uploaded_file is not None:
 STANDARD_COLUMNS = [
     "School Year",
     "Employee Identifier",
+    "Employee First Name",
+    "Employee Last Name",
     "Absence_Days",
     "Date",
     "School Name",
@@ -281,6 +283,10 @@ COLUMN_ALIASES = {
     "school year": "School Year", "schoolyear": "School Year", "sy": "School Year",
     "employee identifier": "Employee Identifier", "employee id": "Employee Identifier",
     "emp id": "Employee Identifier", "employee_id": "Employee Identifier",
+    "employee first name": "Employee First Name", "first name": "Employee First Name",
+    "employee first": "Employee First Name", "first": "Employee First Name",
+    "employee last name": "Employee Last Name", "last name": "Employee Last Name",
+    "employee last": "Employee Last Name", "last": "Employee Last Name",
     "absence_days": "Absence_Days", "absence days": "Absence_Days",
     "percent of day": "Absence_Days",  # Percent of Day is already in days (1.0, 0.5)
     "date": "Date", "school name": "School Name", "reason": "Reason",
@@ -664,7 +670,8 @@ if st.session_state.agent_state.get("rating_results"):
     cc_maximum = results.get("cc_maximum", deductible + cc_days)
     ark_rate = rating_inputs.get("ark_commission_rate", 0.15)
     abcover_rate = rating_inputs.get("abcover_commission_rate", 0.15)
-    
+    avg_metrics = None  # set from Calculation Breakdown by School Year when available; used in Coverage Metrics & Premium
+
     # ============================================================================
     # PER-SCHOOL-YEAR METRICS TABLE (Like Excel)
     # ============================================================================
@@ -729,11 +736,12 @@ if st.session_state.agent_state.get("rating_results"):
     # ============================================================================
     # CALCULATION BREAKDOWN (For Validation)
     # ============================================================================
-    if results.get("cc_range_details") or results.get("high_claimant_details"):
+    if results.get("cc_range_details") or results.get("high_claimant_details") or results.get("per_school_year_breakdown"):
         st.subheader("🔍 Calculation Breakdown (For Validation)")
+        st.caption("Overall numbers below are **cumulative across all school years**. For a **year-by-year** breakdown, see the table under « Calculation Breakdown by School Year ».")
         col1, col2 = st.columns(2)
         with col1:
-            st.write("**Teacher Distribution:**")
+            st.write("**Teacher Distribution (All Years):**")
             st.write(f"- Total Teachers: {results.get('total_teachers', 0):,}")
             st.write(f"- Below Deductible (≤{deductible}): {results.get('below_deductible_count', 0):,}")
             st.write(f"- In CC Range ({deductible+1}-{cc_maximum}): {results.get('num_staff_cc_range', 0):,}")
@@ -744,6 +752,67 @@ if st.session_state.agent_state.get("rating_results"):
             st.write(f"- CC Days: {cc_days} days")
             st.write(f"- CC Maximum: {cc_maximum} days")
             st.write(f"- Replacement Cost: ${replacement_cost:.2f}/day")
+        # Per-school-year calculation breakdown (yearly, not cumulative)
+        if results.get("per_school_year_breakdown"):
+            st.markdown("---")
+            st.write("**📅 Calculation Breakdown by School Year**")
+            breakdown = results["per_school_year_breakdown"]
+            by_year_rows = []
+            for sy in sorted(breakdown.keys()):
+                b = breakdown[sy]
+                by_year_rows.append({
+                    "School Year": sy,
+                    "Total Teachers": f"{b['total_teachers']:,}",
+                    "Below Deductible": f"{b['below_deductible']:,}",
+                    "In CC Range": f"{b['in_cc_range']:,}",
+                    "High Claimant": f"{b['high_claimant']:,}",
+                    "Total CC Days": f"{b['total_cc_days']:,.2f}",
+                    "Excess Days": f"{b['excess_days']:,.2f}",
+                    "Replacement Cost ($)": f"${b.get('replacement_cost_cc', 0):,.2f}",
+                    "ARK Commission ($)": f"${b.get('ark_commission', 0):,.2f}",
+                    "ABCover Commission ($)": f"${b.get('abcover_commission', 0):,.2f}",
+                    "Premium ($)": f"${b['premium']:,.2f}",
+                })
+            # Average row (last row)
+            n_years = len(breakdown)
+            if n_years > 0:
+                sum_teachers = sum(b['total_teachers'] for b in breakdown.values())
+                sum_below = sum(b['below_deductible'] for b in breakdown.values())
+                sum_cc = sum(b['in_cc_range'] for b in breakdown.values())
+                sum_high = sum(b['high_claimant'] for b in breakdown.values())
+                sum_cc_days = sum(b['total_cc_days'] for b in breakdown.values())
+                sum_excess = sum(b['excess_days'] for b in breakdown.values())
+                sum_rc = sum(b.get('replacement_cost_cc', 0) for b in breakdown.values())
+                sum_ark = sum(b.get('ark_commission', 0) for b in breakdown.values())
+                sum_abcover = sum(b.get('abcover_commission', 0) for b in breakdown.values())
+                sum_premium = sum(b['premium'] for b in breakdown.values())
+                avg_metrics = {
+                    'total_teachers': sum_teachers / n_years,
+                    'below_deductible': sum_below / n_years,
+                    'in_cc_range': sum_cc / n_years,
+                    'high_claimant': sum_high / n_years,
+                    'total_cc_days': sum_cc_days / n_years,
+                    'excess_days': sum_excess / n_years,
+                    'replacement_cost_cc': sum_rc / n_years,
+                    'ark_commission': sum_ark / n_years,
+                    'abcover_commission': sum_abcover / n_years,
+                    'premium': sum_premium / n_years,
+                }
+                by_year_rows.append({
+                    "School Year": "Average",
+                    "Total Teachers": f"{avg_metrics['total_teachers']:,.1f}",
+                    "Below Deductible": f"{avg_metrics['below_deductible']:,.1f}",
+                    "In CC Range": f"{avg_metrics['in_cc_range']:,.1f}",
+                    "High Claimant": f"{avg_metrics['high_claimant']:,.1f}",
+                    "Total CC Days": f"{avg_metrics['total_cc_days']:,.2f}",
+                    "Excess Days": f"{avg_metrics['excess_days']:,.2f}",
+                    "Replacement Cost ($)": f"${avg_metrics['replacement_cost_cc']:,.2f}",
+                    "ARK Commission ($)": f"${avg_metrics['ark_commission']:,.2f}",
+                    "ABCover Commission ($)": f"${avg_metrics['abcover_commission']:,.2f}",
+                    "Premium ($)": f"${avg_metrics['premium']:,.2f}",
+                })
+            st.dataframe(_dataframe_safe_for_display(pd.DataFrame(by_year_rows)), width="stretch", hide_index=True)
+            st.caption("Each row shows metrics for **that school year only** (not cumulative). Last row is **average** across years.")
         if results.get("cc_range_details"):
             with st.expander("📋 CC Range Staff Details (How CC Days are Calculated)", expanded=False):
                 cc_details = results["cc_range_details"]
@@ -760,34 +829,62 @@ if st.session_state.agent_state.get("rating_results"):
                     st.caption(f"Total Excess Days: {results.get('excess_days', 0):.2f}")
                 else:
                     st.write("No high claimant staff.")
+        if (results.get("cc_range_details") or results.get("high_claimant_details")):
+            st.caption("💡 **If first/last names are blank:** In Step 2, include the columns that contain employee first and last names in \"Select columns to keep\". You can map them to **Employee First Name** / **Employee Last Name** or keep names like **First Name** / **Last Name** — both work.")
         st.markdown("---")
     
-    # Coverage Metrics
+    # Coverage Metrics (show average values when we have per-year breakdown)
     st.subheader("📈 Coverage Metrics")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Staff in CC Range", f"{results.get('num_staff_cc_range', 0):,}")
-    with col2:
-        st.metric("Total CC Days", f"{results.get('total_cc_days', 0):,.2f}")
-    with col3:
-        st.metric("Replacement Cost × CC Days", f"${results.get('replacement_cost_cc', 0):,.2f}")
+    if avg_metrics is not None:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Staff in CC Range (Avg)", f"{avg_metrics['in_cc_range']:,.1f}")
+        with col2:
+            st.metric("Total CC Days (Avg)", f"{avg_metrics['total_cc_days']:,.2f}")
+        with col3:
+            st.metric("Replacement Cost × CC Days (Avg)", f"${avg_metrics['replacement_cost_cc']:,.2f}")
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Staff in CC Range", f"{results.get('num_staff_cc_range', 0):,}")
+        with col2:
+            st.metric("Total CC Days", f"{results.get('total_cc_days', 0):,.2f}")
+        with col3:
+            st.metric("Replacement Cost × CC Days", f"${results.get('replacement_cost_cc', 0):,.2f}")
     
     # High Claimant Metrics (no reasoning caption)
     st.subheader("⚠️ High Claimant Metrics")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("High Claimant Staff", f"{results.get('num_high_claimant', 0):,}")
-    with col2:
-        st.metric("Excess Days", f"{results.get('excess_days', 0):,.2f}")
-    with col3:
-        st.metric("High Claimant Cost", f"${results.get('high_claimant_cost', 0):,.2f}")
+    if avg_metrics is not None:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("High Claimant Staff (Avg)", f"{avg_metrics['high_claimant']:,.1f}")
+        with col2:
+            st.metric("Excess Days (Avg)", f"{avg_metrics['excess_days']:,.2f}")
+        with col3:
+            high_claimant_cost_avg = (avg_metrics['excess_days'] * replacement_cost) if avg_metrics else 0
+            st.metric("High Claimant Cost (Avg)", f"${high_claimant_cost_avg:,.2f}")
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("High Claimant Staff", f"{results.get('num_high_claimant', 0):,}")
+        with col2:
+            st.metric("Excess Days", f"{results.get('excess_days', 0):,.2f}")
+        with col3:
+            st.metric("High Claimant Cost", f"${results.get('high_claimant_cost', 0):,.2f}")
     
-    # Premium Calculation – full numbers visible (no truncation)
+    # Premium Calculation (show average values when we have per-year breakdown)
     st.subheader("💰 Premium Calculation")
-    rc_cc = results.get("replacement_cost_cc", 0)
-    ark = results.get("ark_commission", 0)
-    abcover = results.get("abcover_commission", 0)
-    total_premium_val = results.get("total_premium", 0)
+    if avg_metrics is not None:
+        rc_cc = avg_metrics['replacement_cost_cc']
+        ark = avg_metrics['ark_commission']
+        abcover = avg_metrics['abcover_commission']
+        total_premium_val = avg_metrics['premium']
+        st.caption("Values below are **averages** from the Calculation Breakdown by School Year table.")
+    else:
+        rc_cc = results.get("replacement_cost_cc", 0)
+        ark = results.get("ark_commission", 0)
+        abcover = results.get("abcover_commission", 0)
+        total_premium_val = results.get("total_premium", 0)
     st.markdown(f"""
     - **Replacement Cost (CC):** ${rc_cc:,.2f}  
     - **ARK Commission:** ${ark:,.2f}  

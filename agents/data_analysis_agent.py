@@ -186,6 +186,8 @@ Sample data (first 5 rows):
 
 For each school column, decide which standard name it maps to (if any). Use the column name AND sample values to infer meaning.
 - "Employee Identifier" / "Employee ID" = unique staff ID (e.g. AEnglish, 12345)
+- "Employee First Name" / "First Name" = employee's first name (used in calculation breakdown tables).
+- "Employee Last Name" / "Last Name" = employee's last name (used in calculation breakdown tables).
 - "School Year" = fiscal year like "2020-2021", OR a date column we can derive it from
 - "Absence_Days" = ONLY map "Percent of Day" or columns that are ALREADY in days (0.5, 1.0). DO NOT map "Duration" - Duration is typically HOURS (e.g. 7.5). Our system calculates Absence_Days from Absence Type + Duration.
 - "Date" = absence date (when the absence occurred). DO NOT map "Hire Date" to "Date" - Hire Date is when the employee was hired, not the absence date. Do not map Hire Date to any standard column; leave it unmapped or exclude it.

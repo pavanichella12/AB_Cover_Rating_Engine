@@ -1,5 +1,5 @@
-# ABCover Streamlit app - Docker image
-FROM python:3.11-slim
+# ABCover Streamlit app - Docker image (linux/amd64 for ECS Fargate)
+FROM --platform=linux/amd64 python:3.11-slim
 
 # Avoid buffers so logs show up immediately
 ENV PYTHONUNBUFFERED=1

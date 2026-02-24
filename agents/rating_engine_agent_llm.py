@@ -351,6 +351,50 @@ Note: Calculation approach is FIXED based on Excel template:
         overall_total_absences = float(cleaned_data['Absence_Days'].sum()) if 'Absence_Days' in cleaned_data.columns else len(cleaned_data)
         overall_total_replacement_cost = overall_total_absences * replacement_cost
         
+        # Build employee first/last name lookup from cleaned_data (for detail tables)
+        # Prefer exact standard names; fall back to case-insensitive and fuzzy match (e.g. First_Name, Given Name, Surname)
+        emp_name_lookup = {}
+        if cleaned_data is not None and not cleaned_data.empty and 'Employee Identifier' in cleaned_data.columns:
+            cols = list(cleaned_data.columns)
+            first_name_col = None
+            last_name_col = None
+            exact_first = ['Employee First Name', 'First Name', 'Employee First', 'First']
+            exact_last = ['Employee Last Name', 'Last Name', 'Employee Last', 'Last']
+            for c in cols:
+                c_lower = str(c).strip().lower().replace('_', ' ').replace('-', ' ')
+                if first_name_col is None and (c in exact_first or c_lower in [x.lower() for x in exact_first]):
+                    first_name_col = c
+                if first_name_col is None and ('first' in c_lower and 'name' in c_lower) or c_lower in ('first', 'given name', 'given'):
+                    first_name_col = c
+                if last_name_col is None and (c in exact_last or c_lower in [x.lower() for x in exact_last]):
+                    last_name_col = c
+                if last_name_col is None and ('last' in c_lower and 'name' in c_lower) or c_lower in ('last', 'surname', 'family name'):
+                    last_name_col = c
+            if first_name_col is None:
+                for c in exact_first:
+                    if c in cols:
+                        first_name_col = c
+                        break
+            if last_name_col is None:
+                for c in exact_last:
+                    if c in cols:
+                        last_name_col = c
+                        break
+            if first_name_col is not None or last_name_col is not None:
+                def _str_val(val):
+                    return '' if pd.isna(val) else str(val).strip()
+                first_row_per_emp = cleaned_data.drop_duplicates(subset=['Employee Identifier'], keep='first')
+                for _, row in first_row_per_emp.iterrows():
+                    eid = row['Employee Identifier']
+                    emp_name_lookup[eid] = (
+                        _str_val(row.get(first_name_col, '')) if first_name_col else '',
+                        _str_val(row.get(last_name_col, '')) if last_name_col else ''
+                    )
+        
+        def _emp_names(emp_id):
+            first, last = emp_name_lookup.get(emp_id, ('', ''))
+            return first, last
+        
         # Perform calculations based on recommended approach
         cc_maximum = deductible + cc_days
         total_days_per_teacher = teacher_days.groupby('Employee Identifier')['Total_Days'].sum()
@@ -370,13 +414,16 @@ Note: Calculation approach is FIXED based on Excel template:
             if days > deductible:
                 # Count days in CC range: (days - deductible), but max is (cc_maximum - deductible)
                 days_in_range = min(days - deductible, cc_maximum - deductible)
-                total_cc_days += days_in_range
+                first_name, last_name = _emp_names(emp_id)
                 cc_range_details.append({
                     'employee_id': emp_id,
+                    'employee_first_name': first_name,
+                    'employee_last_name': last_name,
                     'total_days': days,
                     'days_in_cc_range': days_in_range,
                     'calculation': f"min({days} - {deductible}, {cc_maximum} - {deductible}) = {days_in_range}"
                 })
+                total_cc_days += days_in_range
         
         # Replacement Cost × CC Days
         replacement_cost_cc = replacement_cost * total_cc_days
@@ -391,8 +438,11 @@ Note: Calculation approach is FIXED based on Excel template:
             # Count all days for high claimants
             excess_days = high_claimant_staff.sum()
             for emp_id, days in high_claimant_staff.items():
+                first_name, last_name = _emp_names(emp_id)
                 high_claimant_details.append({
                     'employee_id': emp_id,
+                    'employee_first_name': first_name,
+                    'employee_last_name': last_name,
                     'total_days': days,
                     'excess_days': days,
                     'calculation': f"All days counted: {days}"
@@ -402,8 +452,11 @@ Note: Calculation approach is FIXED based on Excel template:
             excess_days = (high_claimant_staff - cc_maximum).sum()
             for emp_id, days in high_claimant_staff.items():
                 excess = days - cc_maximum
+                first_name, last_name = _emp_names(emp_id)
                 high_claimant_details.append({
                     'employee_id': emp_id,
+                    'employee_first_name': first_name,
+                    'employee_last_name': last_name,
                     'total_days': days,
                     'excess_days': excess,
                     'calculation': f"{days} - {cc_maximum} = {excess}"
@@ -417,9 +470,48 @@ Note: Calculation approach is FIXED based on Excel template:
         abcover_commission = replacement_cost_cc * abcover_commission_rate
         total_premium = replacement_cost_cc + ark_commission + abcover_commission
         
+        # ============================================================================
+        # PER-SCHOOL-YEAR CALCULATION BREAKDOWN (teacher distribution, CC, premium per year)
+        # ============================================================================
+        per_school_year_breakdown = {}
+        if 'School Year' in teacher_days.columns:
+            for sy in teacher_days['School Year'].dropna().unique():
+                sy_str = str(sy)
+                sy_df = teacher_days[teacher_days['School Year'] == sy]
+                days_per_teacher_sy = sy_df.groupby('Employee Identifier')['Total_Days'].sum()
+                n_teachers = len(days_per_teacher_sy)
+                below = len(days_per_teacher_sy[days_per_teacher_sy <= deductible])
+                in_cc = len(days_per_teacher_sy[(days_per_teacher_sy > deductible) & (days_per_teacher_sy <= cc_maximum)])
+                high = len(days_per_teacher_sy[days_per_teacher_sy > cc_maximum])
+                staff_cc_sy = days_per_teacher_sy[(days_per_teacher_sy > deductible) & (days_per_teacher_sy <= cc_maximum)]
+                cc_days_sy = sum(min(d - deductible, cc_maximum - deductible) for _, d in staff_cc_sy.items() if d > deductible)
+                high_staff_sy = days_per_teacher_sy[days_per_teacher_sy > cc_maximum]
+                if calculation_approach.get("excess_days_calculation") == "all_days":
+                    excess_sy = high_staff_sy.sum() if len(high_staff_sy) else 0
+                else:
+                    excess_sy = (high_staff_sy - cc_maximum).sum() if len(high_staff_sy) else 0
+                rc_cc_sy = replacement_cost * cc_days_sy
+                ark_sy = rc_cc_sy * ark_commission_rate
+                abcover_sy = rc_cc_sy * abcover_commission_rate
+                premium_sy = rc_cc_sy + ark_sy + abcover_sy
+                per_school_year_breakdown[sy_str] = {
+                    'total_teachers': n_teachers,
+                    'below_deductible': below,
+                    'in_cc_range': in_cc,
+                    'high_claimant': high,
+                    'total_cc_days': float(cc_days_sy),
+                    'excess_days': float(excess_sy),
+                    'replacement_cost_cc': float(rc_cc_sy),
+                    'ark_commission': float(ark_sy),
+                    'abcover_commission': float(abcover_sy),
+                    'premium': float(premium_sy),
+                }
+        
         results = {
             # Per-School-Year Metrics (from cleaned data)
             'per_school_year_metrics': per_school_year_metrics,
+            # Per-School-Year Calculation Breakdown (teacher dist, CC, premium per year)
+            'per_school_year_breakdown': per_school_year_breakdown,
             'overall_total_staff': int(overall_total_staff),
             'overall_total_absences': int(overall_total_absences),
             'overall_total_replacement_cost': float(overall_total_replacement_cost),

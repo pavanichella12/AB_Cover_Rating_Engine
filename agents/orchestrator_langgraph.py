@@ -234,10 +234,29 @@ class LangGraphOrchestrator:
         'schoolyear': 'School Year',
         'sy': 'School Year',
         'fiscal year': 'School Year',
+        'date': 'Date',
+        'absence date': 'Date',
+        'absent date': 'Date',
+        'day': 'Date',
+        'date of absence': 'Date',
         'employee identifier': 'Employee Identifier',
         'employee id': 'Employee Identifier',
         'emp id': 'Employee Identifier',
         'employee_id': 'Employee Identifier',
+        'employee first name': 'Employee First Name',
+        'employee first': 'Employee First Name',
+        'first name': 'Employee First Name',
+        'first_name': 'Employee First Name',
+        'firstname': 'Employee First Name',
+        'given name': 'Employee First Name',
+        'given': 'Employee First Name',
+        'employee last name': 'Employee Last Name',
+        'employee last': 'Employee Last Name',
+        'last name': 'Employee Last Name',
+        'last_name': 'Employee Last Name',
+        'lastname': 'Employee Last Name',
+        'surname': 'Employee Last Name',
+        'family name': 'Employee Last Name',
         'absence_days': 'Absence_Days',
         'absence days': 'Absence_Days',
         'total_days': 'Absence_Days',
@@ -302,13 +321,22 @@ class LangGraphOrchestrator:
             missing = [c for c in self._REQUIRED_CALC_COLUMNS if c not in df.columns]
             if missing:
                 available = list(df.columns)
+                need_date = 'School Year' in missing
+                hint = (
+                    "You need a column for **absence date** or **school year**. "
+                    "In Step 2, include the column that has the date of each absence (e.g. 'Date', 'Absence Date', 'Day') and map it to **Date**, or include a 'School Year' column. "
+                    "We derive School Year from Date (July 1–June 30) when Date is provided."
+                ) if need_date else (
+                    "In Step 2, ensure you keep the columns that contain School Year (or Date), Employee ID, and Absence/Duration days, and map them to standard names (e.g. 'School Year' or 'Date', 'Employee Identifier', 'Absence_Days')."
+                )
                 raise KeyError(
                     f"Cleaned data is missing columns required for the rating calculation: {missing}. "
-                    f"Your data has columns: {available}. "
-                    "In Step 2, ensure you keep the columns that contain School Year, Employee ID, and Absence/Duration days, and that they are named similarly (e.g. 'School Year', 'Employee Identifier', 'Absence_Days')."
+                    f"Your data has columns: {available}. {hint}"
                 )
+            # Keep full cleaned data for rating (so first/last name and other columns are available for detail tables)
+            cleaned_data_full = df.copy()
             # Handle duplicate columns (multiple cols can map to same standard name)
-            # Build a clean 3-column df: take first of School Year/Employee ID, sum Absence_Days
+            # Build a clean 3-column df for teacher_days aggregation only
             def _single_col(d, name, combine_sum=False):
                 cols = [i for i, c in enumerate(d.columns) if c == name]
                 if not cols:
@@ -316,13 +344,13 @@ class LangGraphOrchestrator:
                 if combine_sum and len(cols) > 1:
                     return d.iloc[:, cols].sum(axis=1)
                 return d.iloc[:, cols[0]]
-            df = pd.DataFrame({
+            df_calc = pd.DataFrame({
                 'School Year': _single_col(df, 'School Year'),
                 'Employee Identifier': _single_col(df, 'Employee Identifier'),
                 'Absence_Days': _single_col(df, 'Absence_Days', combine_sum=True),
             })
             # Calculate teacher absence days first
-            teacher_days = df.groupby(['School Year', 'Employee Identifier'])['Absence_Days'].sum().reset_index()
+            teacher_days = df_calc.groupby(['School Year', 'Employee Identifier'])['Absence_Days'].sum().reset_index()
             # Only assign names if count matches (avoids length mismatch with duplicate cols)
             if len(teacher_days.columns) == 3:
                 teacher_days.columns = ['School Year', 'Employee Identifier', 'Total_Days']
@@ -348,11 +376,10 @@ class LangGraphOrchestrator:
             }
             
             # Calculate with LLM reasoning (with full blackboard context)
-            # NOTE: Calculations are done AFTER data cleaning (cleaned_data is used)
-            # Pass both teacher_days (aggregated) and cleaned_data (full DataFrame) to calculate per-school-year metrics
+            # Pass teacher_days (aggregated) and full cleaned_data (so CC/High Claimant tables get first/last name)
             results, reasoning = self.rating_agent.process(
                 teacher_days,
-                df,  # Pass full cleaned_data DataFrame to count staff and absences per school year
+                cleaned_data_full,  # Full DataFrame: staff/absences per year + first/last name for detail tables
                 deductible,
                 cc_days,
                 replacement_cost,
