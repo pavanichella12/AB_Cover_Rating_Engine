@@ -178,16 +178,22 @@ BLACKBOARD CONTEXT (Full workflow history):
 - IMPORTANT: If user already filtered Employee Types, RESPECT their selection. Do not filter again.
 """
         
-        prompt = f"""Analyze this school absence data and reason about appropriate cleaning rules:
+        prompt = f"""Analyze this school absence data and reason about appropriate cleaning rules.
+
+**First, look at the actual values in the data below.** Use what you see to reason:
+- What exact values does "Filled" (or equivalent) have? e.g. "Filled", "Unfilled", "No", "YES" — so we know what "Unfilled + NO Substitute" means for this file.
+- What exact values does "Employee Type" (or job column) have? e.g. "Teacher", "Aide", "Class Description" — so we suggest which to keep.
+- What does "Absence Type" contain? If it's reasons (Sick, Personal) vs duration (Full Day, Half Day), say so; our logic uses duration columns for days when needed.
+- Use the sample rows and value counts to infer school-specific patterns, then suggest rules that fit this data.
 
 School: {school_name or 'Unknown'}
 {context_info}
-Data Summary:
+Data Summary (look at these values when reasoning):
 - Total Rows: {data_summary['rows']:,}
 - Columns: {', '.join(data_summary['columns'])}
-- Employee Types: {json.dumps(data_summary['employee_types'], indent=2)}
-- Filled Status: {json.dumps(data_summary['filled_status'], indent=2)}
-- Absence Types: {json.dumps(data_summary['absence_types'], indent=2)}
+- Employee Types (actual values in data): {json.dumps(data_summary['employee_types'], indent=2)}
+- Filled Status (actual values in data): {json.dumps(data_summary['filled_status'], indent=2)}
+- Absence Types (actual values in data): {json.dumps(data_summary['absence_types'], indent=2)}
 - Missing Values: {json.dumps(data_summary['missing_values'], indent=2)}
 - School Years: {json.dumps(data_summary.get('school_years', {}), indent=2)}
 - Date Range: {json.dumps(data_summary.get('date_range', {}), indent=2)}
@@ -257,100 +263,11 @@ Provide your reasoning and suggested rules in JSON format:
             }
         
         return reasoning
-    
+
     def validate_data_format(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """
-        Validate data format and structure BEFORE applying business rules.
-        
-        Checks:
-        - Required columns exist
-        - Data types are correct
-        - Date formats are valid
-        - No completely empty rows
-        - Invalid values (negative durations, etc.)
-        
-        Args:
-            df: DataFrame to validate
-            
-        Returns:
-            Tuple of (validated DataFrame, validation_report)
-        """
-        df = df.copy()
-        validation_report = {
-            'format_issues': [],
-            'rows_removed': 0,
-            'columns_checked': [],
-            'data_type_issues': [],
-            'invalid_values': []
-        }
-        
-        original_rows = len(df)
-        
-        # Check required columns
-        required_columns = ['Date', 'School Year', 'Employee Identifier', 'Absence Type']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            validation_report['format_issues'].append(f"Missing required columns: {missing_columns}")
-        
-        # Remove completely empty rows (all NaN)
-        if not df.empty:
-            df = df.dropna(how='all')
-            validation_report['rows_removed'] += original_rows - len(df)
-            if original_rows != len(df):
-                validation_report['format_issues'].append(f"Removed {original_rows - len(df)} completely empty rows")
-        
-        # Validate Date column format
-        if 'Date' in df.columns:
-            validation_report['columns_checked'].append('Date')
-            try:
-                # Try to convert to datetime
-                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-                invalid_dates = df['Date'].isna().sum()
-                if invalid_dates > 0:
-                    validation_report['data_type_issues'].append(f"Date: {invalid_dates} invalid date values")
-                    # Remove rows with invalid dates
-                    df = df[df['Date'].notna()]
-                    validation_report['rows_removed'] += invalid_dates
-            except Exception as e:
-                validation_report['format_issues'].append(f"Date column format error: {str(e)}")
-        
-        # Validate Duration column (should be numeric)
-        if 'Duration' in df.columns:
-            validation_report['columns_checked'].append('Duration')
-            try:
-                df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce')
-                # Check for negative durations (invalid)
-                negative_durations = (df['Duration'] < 0).sum()
-                if negative_durations > 0:
-                    validation_report['invalid_values'].append(f"Duration: {negative_durations} negative values found")
-            except Exception as e:
-                validation_report['format_issues'].append(f"Duration column format error: {str(e)}")
-        
-        # Validate School Year format (should be "YYYY-YYYY")
-        if 'School Year' in df.columns:
-            validation_report['columns_checked'].append('School Year')
-            invalid_school_years = 0
-            for idx, row in df.iterrows():
-                school_year = str(row.get('School Year', ''))
-                if pd.notna(row.get('School Year')):
-                    # Check format: should be "YYYY-YYYY"
-                    if not (len(school_year) == 9 and school_year[4] == '-'):
-                        invalid_school_years += 1
-            if invalid_school_years > 0:
-                validation_report['format_issues'].append(f"School Year: {invalid_school_years} records with invalid format")
-        
-        # Validate Employee Identifier (report but do not drop - match EDA/test_toms_river which keeps rows for consistent row counts)
-        if 'Employee Identifier' in df.columns:
-            validation_report['columns_checked'].append('Employee Identifier')
-            empty_identifiers = df['Employee Identifier'].isna().sum()
-            if empty_identifiers > 0:
-                validation_report['format_issues'].append(f"Employee Identifier: {empty_identifiers} missing values (kept for EDA parity)")
-        
-        validation_report['final_rows'] = len(df)
-        validation_report['rows_removed'] = original_rows - len(df)
-        
-        return df, validation_report
-    
+        """Validate data format before business rules. Delegates to run_validation() for UI reuse."""
+        return run_validation(df)
+
     def apply_rule1(self, df: pd.DataFrame, should_apply: bool = True) -> pd.DataFrame:
         """
         Rule 1: Remove records where Filled='Unfilled' AND Needs Substitute='NO'
@@ -458,41 +375,57 @@ Provide your reasoning and suggested rules in JSON format:
     
     def calculate_absence_days(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate absence days based on Absence Type.
-        (This stays deterministic - it's math, not reasoning)
-        
-        Args:
-            df: DataFrame with Absence Type column
-            
-        Returns:
-            DataFrame with 'Absence_Days' column added
+        Calculate absence days. Priority: (1) existing Absence_Days if already in days,
+        (2) Duration (hours) / 7.5, (3) Start Time & End Time difference / 7.5,
+        (4) Absence Type only when it is literally Full Day / Half Day (many files use
+        Absence Type for reason e.g. Sick, Personal — we focus on Duration and times).
         """
         df = df.copy()
-        
-        # Always recalculate when Absence Type exists - pre-existing Absence_Days may be wrong
-        # (e.g. mapped from Duration which is HOURS, not days)
-        if 'Absence Type' not in df.columns:
-            return df
-        
+        HOURS_PER_DAY = 7.5
+
+        def _numeric(val):
+            v = pd.to_numeric(val, errors='coerce')
+            return float(v) if pd.notna(v) else None
+
         def calculate_days(row):
-            if pd.isna(row.get('Absence Type')):
-                return 0
-            
-            abs_type = str(row['Absence Type']).strip()
-            
+            # 1) Already have Absence_Days in days (e.g. "Days of Absence" column)
+            existing = row.get('Absence_Days')
+            if existing is not None:
+                v = _numeric(existing)
+                if v is not None and v >= 0:
+                    return v
+
+            # 2) Duration in hours -> days
+            if 'Duration' in row:
+                hours = _numeric(row['Duration'])
+                if hours is not None and hours >= 0:
+                    return hours / HOURS_PER_DAY
+
+            # 3) Start Time & End Time -> duration in hours -> days
+            if 'Start Time' in row and 'End Time' in row:
+                try:
+                    st = pd.to_datetime(row['Start Time'], errors='coerce')
+                    et = pd.to_datetime(row['End Time'], errors='coerce')
+                    if pd.notna(st) and pd.notna(et):
+                        delta = (et - st).total_seconds() / 3600
+                        if delta >= 0:
+                            return delta / HOURS_PER_DAY
+                except Exception:
+                    pass
+
+            # 4) Absence Type only when it explicitly means duration type (Full Day / Half Day)
+            abs_type = str(row.get('Absence Type', '')).strip()
             if abs_type == 'Full Day':
                 return 1.0
-            elif abs_type in ['AM Half Day', 'PM Half Day']:
+            if abs_type in ('AM Half Day', 'PM Half Day'):
                 return 0.5
-            elif abs_type == 'Custom Duration':
-                if 'Duration' in row:
-                    hours = pd.to_numeric(row['Duration'], errors='coerce')
-                    if pd.notna(hours):
-                        return hours / 7.5
-                return 0
-            else:
-                return 0
-        
+            if abs_type == 'Custom Duration' and 'Duration' in row:
+                hours = _numeric(row['Duration'])
+                if hours is not None and hours >= 0:
+                    return hours / HOURS_PER_DAY
+
+            return 0.0
+
         df['Absence_Days'] = df.apply(calculate_days, axis=1)
         return df
     
@@ -571,3 +504,75 @@ Provide your reasoning and suggested rules in JSON format:
         stats['rows_removed'] = original_rows - len(df)
         
         return df, stats
+
+
+def run_validation(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Standalone data validation (no LLM). Use for first-class validation step in UI.
+    Checks: required columns, data types, date format, empty rows, invalid values.
+    Returns:
+        Tuple of (validated DataFrame, validation_report dict).
+    """
+    df = df.copy()
+    validation_report = {
+        'format_issues': [],
+        'rows_removed': 0,
+        'columns_checked': [],
+        'data_type_issues': [],
+        'invalid_values': []
+    }
+    original_rows = len(df)
+
+    required_columns = ['Date', 'School Year', 'Employee Identifier', 'Absence Type']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        validation_report['format_issues'].append(f"Missing required columns: {missing_columns}")
+
+    if not df.empty:
+        df = df.dropna(how='all')
+        validation_report['rows_removed'] += original_rows - len(df)
+        if original_rows != len(df):
+            validation_report['format_issues'].append(f"Removed {original_rows - len(df)} completely empty rows")
+
+    if 'Date' in df.columns:
+        validation_report['columns_checked'].append('Date')
+        try:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            invalid_dates = df['Date'].isna().sum()
+            if invalid_dates > 0:
+                validation_report['data_type_issues'].append(f"Date: {invalid_dates} invalid date values")
+                df = df[df['Date'].notna()]
+                validation_report['rows_removed'] += invalid_dates
+        except Exception as e:
+            validation_report['format_issues'].append(f"Date column format error: {str(e)}")
+
+    if 'Duration' in df.columns:
+        validation_report['columns_checked'].append('Duration')
+        try:
+            df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce')
+            negative_durations = (df['Duration'] < 0).sum()
+            if negative_durations > 0:
+                validation_report['invalid_values'].append(f"Duration: {negative_durations} negative values found")
+        except Exception as e:
+            validation_report['format_issues'].append(f"Duration column format error: {str(e)}")
+
+    if 'School Year' in df.columns:
+        validation_report['columns_checked'].append('School Year')
+        invalid_school_years = 0
+        for idx, row in df.iterrows():
+            school_year = str(row.get('School Year', ''))
+            if pd.notna(row.get('School Year')):
+                if not (len(school_year) == 9 and school_year[4] == '-'):
+                    invalid_school_years += 1
+        if invalid_school_years > 0:
+            validation_report['format_issues'].append(f"School Year: {invalid_school_years} records with invalid format")
+
+    if 'Employee Identifier' in df.columns:
+        validation_report['columns_checked'].append('Employee Identifier')
+        empty_identifiers = df['Employee Identifier'].isna().sum()
+        if empty_identifiers > 0:
+            validation_report['format_issues'].append(f"Employee Identifier: {empty_identifiers} missing values (kept for EDA parity)")
+
+    validation_report['final_rows'] = len(df)
+    validation_report['rows_removed'] = original_rows - len(df)
+    return df, validation_report

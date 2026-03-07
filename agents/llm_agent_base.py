@@ -1,9 +1,12 @@
 """
-Base LLM Agent Class - All LLM-powered agents inherit from this
+Base LLM Agent Class - All LLM-powered agents inherit from this.
+Includes observability (prompt/response/tokens/timing) and error recovery (retries + optional fallback).
 """
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
+import time
+import logging
 
 # Optional imports for different LLM providers
 try:
@@ -27,6 +30,9 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Observability: log LLM calls (prompt length, response length, duration, token usage if available)
+_LLM_LOGGER = logging.getLogger("abcover.llm")
 
 
 class LLMAgentBase(ABC):
@@ -109,24 +115,97 @@ class LLMAgentBase(ABC):
         """Return the system prompt for this agent."""
         pass
     
+    def _get_fallback_llm(self) -> Optional[Any]:
+        """Optional fallback LLM (e.g. Google) if primary fails. Override or set via env."""
+        fallback_provider = (os.getenv("LLM_FALLBACK_PROVIDER") or "").strip().lower()
+        if not fallback_provider or fallback_provider == self.model_provider:
+            return None
+        try:
+            if fallback_provider == "google" or fallback_provider == "gemini":
+                api_key = os.getenv("GOOGLE_API_KEY")
+                if api_key:
+                    return ChatGoogleGenerativeAI(
+                        model=os.getenv("LLM_MODEL") or "gemini-2.5-flash",
+                        temperature=0.3,
+                        google_api_key=api_key,
+                    )
+        except Exception:
+            pass
+        return None
+
     def _call_llm(self, user_message: str, context: Optional[Dict] = None) -> str:
         """
-        Call the LLM with a user message and optional context.
-        
-        Args:
-            user_message: The user's message/query
-            context: Optional context dictionary to include
-            
-        Returns:
-            LLM response as string
+        Call the LLM with retries, optional fallback, and observability logging.
+        Logs: agent name, prompt length, response length, duration, token usage (if available).
         """
         messages = [
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=user_message)
+            HumanMessage(content=user_message),
         ]
-        
-        response = self.llm.invoke(messages)
-        return response.content
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        retry_delay = float(os.getenv("LLM_RETRY_DELAY", "1.0"))
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                start = time.perf_counter()
+                response = self.llm.invoke(messages)
+                duration_sec = time.perf_counter() - start
+                content = response.content if hasattr(response, "content") else str(response)
+                # Token usage (LangChain often puts it in response_metadata or usage_metadata)
+                usage = {}
+                if hasattr(response, "response_metadata") and response.response_metadata:
+                    usage = response.response_metadata.get("usage", response.response_metadata)
+                if not usage and hasattr(response, "usage_metadata") and response.usage_metadata:
+                    usage = {
+                        "input_tokens": getattr(response.usage_metadata, "input_tokens", None),
+                        "output_tokens": getattr(response.usage_metadata, "output_tokens", None),
+                    }
+                # Observability log (no full prompt/response to avoid huge logs; use LANGCHAIN_TRACING for full traces)
+                _LLM_LOGGER.info(
+                    "llm_call agent=%s provider=%s prompt_len=%d response_len=%d duration_sec=%.2f input_tokens=%s output_tokens=%s attempt=%d",
+                    self.agent_name,
+                    self.model_provider,
+                    len(self.system_prompt) + len(user_message),
+                    len(content),
+                    duration_sec,
+                    usage.get("input_tokens"),
+                    usage.get("output_tokens"),
+                    attempt + 1,
+                )
+                return content
+            except Exception as e:
+                last_error = e
+                _LLM_LOGGER.warning(
+                    "llm_call attempt %d failed agent=%s error=%s",
+                    attempt + 1,
+                    self.agent_name,
+                    str(e),
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                continue
+
+        # Retries exhausted: try fallback model if configured
+        fallback = self._get_fallback_llm()
+        if fallback is not None:
+            try:
+                start = time.perf_counter()
+                response = fallback.invoke(messages)
+                duration_sec = time.perf_counter() - start
+                content = response.content if hasattr(response, "content") else str(response)
+                _LLM_LOGGER.info(
+                    "llm_call fallback agent=%s prompt_len=%d response_len=%d duration_sec=%.2f",
+                    self.agent_name,
+                    len(self.system_prompt) + len(user_message),
+                    len(content),
+                    duration_sec,
+                )
+                return content
+            except Exception as fallback_err:
+                _LLM_LOGGER.error("llm_call fallback failed agent=%s error=%s", self.agent_name, str(fallback_err))
+                raise last_error from fallback_err
+        raise last_error
     
     def _call_llm_with_tools(self, user_message: str, tools: list, context: Optional[Dict] = None) -> Any:
         """

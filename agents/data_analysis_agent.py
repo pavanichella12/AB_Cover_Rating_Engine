@@ -171,33 +171,62 @@ Provide your suggestions in JSON format:
         """
         if df is None or df.empty:
             return {}
-        # Prepare summary for LLM
+        # Prepare summary for LLM: column names, sample rows, AND per-column value view so AI can "see" the data
         cols = df.columns.tolist()
         sample = df.head(5).to_dict("records") if len(df) > 0 else []
         sample_str = json.dumps(sample, indent=2, default=str)
         standard_str = json.dumps(standard_columns)
+
+        def _column_value_summary(series, max_categories=12):
+            """What we see in this column: dtype + value distribution so AI can infer meaning."""
+            if series is None or series.empty:
+                return {"dtype": "empty", "values": []}
+            dtype = str(series.dtype)
+            # For object/category: show value_counts (top values). For numeric: show sample + min/max if useful.
+            if pd.api.types.is_numeric_dtype(series):
+                dropna = series.dropna()
+                if len(dropna) == 0:
+                    return {"dtype": dtype, "values": []}
+                uniq = dropna.unique()
+                if len(uniq) <= max_categories:
+                    sample_vals = sorted(uniq.tolist())[:max_categories]
+                else:
+                    sample_vals = [float(series.min()), float(series.max()), "… (numeric)"]
+                return {"dtype": dtype, "values": sample_vals}
+            vc = series.dropna().astype(str).value_counts()
+            top = vc.head(max_categories)
+            return {"dtype": dtype, "values": list(top.to_dict().keys())}
+
+        column_value_view = {}
+        for c in cols:
+            try:
+                column_value_view[c] = _column_value_summary(df[c])
+            except Exception:
+                column_value_view[c] = {"dtype": "unknown", "values": []}
+        column_view_str = json.dumps(column_value_view, indent=2, default=str)
+
         prompt = f"""You analyze school absence data files. Different schools use different column names.
 Our company uses these STANDARD column names: {standard_str}
 
 This school's data has columns: {cols}
 
+**What we SEE in each column (use this to infer meaning — look at actual values):**
+{column_view_str}
+
 Sample data (first 5 rows):
 {sample_str}
 
-For each school column, decide which standard name it maps to (if any). Use the column name AND sample values to infer meaning.
-- "Employee Identifier" / "Employee ID" = unique staff ID (e.g. AEnglish, 12345)
-- "Employee First Name" / "First Name" = employee's first name (used in calculation breakdown tables).
-- "Employee Last Name" / "Last Name" = employee's last name (used in calculation breakdown tables).
-- "School Year" = fiscal year like "2020-2021", OR a date column we can derive it from
-- "Absence_Days" = ONLY map "Percent of Day" or columns that are ALREADY in days (0.5, 1.0). DO NOT map "Duration" - Duration is typically HOURS (e.g. 7.5). Our system calculates Absence_Days from Absence Type + Duration.
-- "Date" = absence date (when the absence occurred). DO NOT map "Hire Date" to "Date" - Hire Date is when the employee was hired, not the absence date. Do not map Hire Date to any standard column; leave it unmapped or exclude it.
-- "School Name", "Reason", "Employee Title", "Employee Type", "Absence Type", etc.
-- Keep "Duration" and "Absence Type" as-is - our cleaning agent uses them to compute Absence_Days.
+**Instructions — think step by step from the data:**
+1. Look at each column's NAME and its VALUES above. Infer meaning from both.
+2. Numeric column with values like 0.5, 1, 2, 1.0 → likely days (map to "Absence_Days" if it clearly is days). Numeric column with 7.5, 3.5, 6 → likely HOURS (keep as "Duration", do NOT map to Absence_Days).
+3. Column with values like Sick, Personal, Vacation, Professional Development → reason for leave (map to "Reason" or keep as "Absence Type"; our logic uses Absence Type for duration only when it says Full Day/Half Day, so reason-of-leave columns are fine as Absence Type or Reason).
+4. Column with values like Teacher, Aide, Substitute → job category → "Employee Type". Column with values like 2020-2021, 2021-2022 → "School Year". Column with date-like values → "Date" (absence date; NOT Hire Date).
+5. "Employee Identifier" = unique staff ID. "Employee First Name" / "Employee Last Name" = names for reports.
+6. Map "Date" to "School Year" only if there is no dedicated School Year column (we derive year from dates). Do NOT map Hire Date to Date or School Year.
 
-If a school column doesn't match any standard, DO NOT include it in the mapping (we keep it as-is).
-
-Respond with ONLY a JSON object, no other text. Example: {{"Emp ID": "Employee Identifier", "Percent of Day": "Absence_Days"}} - do NOT map Duration to Absence_Days.
-Use the EXACT school column names as keys and EXACT standard names as values. Map "Date" to "School Year" if there is no School Year column (we derive it from dates).
+For each school column, decide which standard name it maps to (if any). If a column doesn't match any standard, omit it from the mapping.
+Respond with ONLY a JSON object, no other text. Example: {{"Emp ID": "Employee Identifier", "Days of Absence": "Absence_Days"}}.
+Use EXACT school column names as keys and EXACT standard names as values.
 """
         try:
             response = self._call_llm(prompt)

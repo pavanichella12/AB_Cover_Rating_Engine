@@ -1,11 +1,22 @@
 # CI/CD: On push to main, build Docker image, push to ECR, and update ECS service.
+# Runs only when app code or config changes (not on every push). You can also "Run workflow" manually.
 name: Build and Deploy to ECS
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:  # Allow manual run from Actions tab
+    paths:
+      - 'app.py'
+      - 'auth.py'
+      - 'audit.py'
+      - 'add_user.py'
+      - 'agents/**'
+      - '.streamlit/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'abcover_logo.png'
+  workflow_dispatch:  # Deploy anytime: Actions → Build and Deploy to ECS → Run workflow
 
 env:
   AWS_REGION: us-east-1
@@ -35,7 +46,7 @@ jobs:
 
       - name: Build, tag, and push image
         run: |
-          docker build -t ${{ env.ECR_IMAGE }}:latest .
+          docker build --platform linux/amd64 -t ${{ env.ECR_IMAGE }}:latest .
           docker push ${{ env.ECR_IMAGE }}:latest
 
       - name: Deploy to ECS

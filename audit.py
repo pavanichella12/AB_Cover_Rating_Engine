@@ -51,7 +51,7 @@ def get_logger():
 
 
 def init_audit_db() -> None:
-    """Create rating_runs table if it doesn't exist."""
+    """Create rating_runs table if it doesn't exist; add versioning columns if missing."""
     conn = get_connection()
     try:
         conn.execute("""
@@ -72,6 +72,13 @@ def init_audit_db() -> None:
             )
         """)
         conn.commit()
+        # Add versioning columns for reproducibility (run_id, model_name, dataset_fingerprint)
+        for col in ("run_id", "model_name", "dataset_fingerprint"):
+            try:
+                conn.execute(f"ALTER TABLE rating_runs ADD COLUMN {col} TEXT")
+                conn.commit()
+            except Exception:
+                pass
     finally:
         conn.close()
 
@@ -88,8 +95,11 @@ def log_run(
     total_premium: Optional[float] = None,
     error_message: Optional[str] = None,
     step: Optional[str] = None,
+    run_id: Optional[str] = None,
+    model_name: Optional[str] = None,
+    dataset_fingerprint: Optional[str] = None,
 ) -> None:
-    """Record a run (success or error) in the audit table."""
+    """Record a run (success or error) in the audit table. run_id/model_name/dataset_fingerprint for reproducibility."""
     init_audit_db()
     conn = get_connection()
     try:
@@ -98,8 +108,8 @@ def log_run(
             """INSERT INTO rating_runs (
                 created_at, user_email, filename, filters_json,
                 rows_raw, rows_selected, rows_cleaned, total_teachers, total_premium,
-                status, error_message, step
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, error_message, step, run_id, model_name, dataset_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.utcnow().isoformat(),
                 user_email,
@@ -113,6 +123,9 @@ def log_run(
                 status,
                 error_message,
                 step,
+                run_id,
+                model_name,
+                dataset_fingerprint,
             ),
         )
         conn.commit()

@@ -199,7 +199,8 @@ BLACKBOARD CONTEXT (Full workflow history - you can see everything):
 - You have access to the complete data pipeline and can see what cleaning rules were applied and why.
 """
         
-        prompt = f"""Analyze this school's absence data and reason about the appropriate Rating Engine calculation approach:
+        prompt = f"""Analyze this school's absence data and reason about the appropriate Rating Engine calculation approach.
+**Look at the actual numbers below** (totals, distribution, deductible/CC inputs) and reason from what you see; note any anomalies or school-specific patterns.
 
 School: {school_name or 'Unknown'}
 {context_info}

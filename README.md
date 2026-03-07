@@ -72,6 +72,21 @@ streamlit run app.py
 
 Then open http://localhost:8501. Use **Create account** (with an @abcover.org email) to sign up, or **Log in** if you already have an account.
 
+### 4. (Optional) LangSmith – see full prompts and responses
+
+To see every prompt sent to the LLM and every response in a browser (useful for debugging):
+
+1. Sign up at [langsmith.com](https://smith.langchain.com) and create an API key.
+2. Add to your `.env`:
+   ```env
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_API_KEY=your_langsmith_api_key_here
+   LANGCHAIN_PROJECT=abcover
+   ```
+3. Restart the app. LLM calls will show up under the project **abcover** in the LangSmith dashboard.
+
+No code changes are required; LangChain reads these variables and sends traces automatically.
+
 ## How It Works
 
 1. **Upload File**: User uploads school absence data

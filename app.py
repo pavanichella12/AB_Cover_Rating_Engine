@@ -5,13 +5,25 @@ Login: SQLite + hashed passwords. Users with @abcover.org email can create an ac
 """
 
 import base64
+import hashlib
 import os
-from typing import Optional
+import uuid
+from typing import Optional, List, Tuple
 import streamlit as st
 import pandas as pd
 from agents import LangGraphOrchestrator, AgentState, DataAnalysisAgent
+from agents.data_cleaning_agent_llm import run_validation
 from auth import init_db, check_credentials, create_user
 from audit import setup_logging, init_audit_db, init_login_events_db, get_logger, log_run, log_error, log_login_success, log_login_failure, log_logout
+from pdf_export import build_results_pdf
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# LangSmith: when LANGCHAIN_API_KEY is set, enable tracing so you can see full prompts/responses at smith.langchain.com
+if os.getenv("LANGCHAIN_API_KEY"):
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_PROJECT", "abcover")
 
 # Logging (init early so we can log login)
 setup_logging()
@@ -21,6 +33,30 @@ logger = get_logger()
 
 # Display: avoid PyArrow errors (e.g. "$150.00" converted to number) and cap large tables
 DISPLAY_MAX_ROWS = 5000
+
+
+def _dataset_fingerprint(df) -> str:
+    """Lightweight fingerprint for versioning/audit: columns + row count (no full data)."""
+    if df is None or not hasattr(df, "columns"):
+        return ""
+    cols = tuple(sorted(df.columns.astype(str).tolist()))
+    n = len(df) if hasattr(df, "__len__") else 0
+    h = hashlib.sha256(f"{cols}|{n}".encode()).hexdigest()[:16]
+    return h
+
+
+def _mapping_sanity_checks(column_map: dict) -> List[str]:
+    """Sanity checks on column mapping for rating pipeline. Returns list of warning messages."""
+    warnings = []
+    stds = set(column_map.values()) if column_map else set()
+    if "Date" not in stds and "School Year" not in stds:
+        warnings.append("No column mapped to **Date** or **School Year**. Rating needs at least one to derive school year.")
+    if "Employee Identifier" not in stds:
+        warnings.append("No column mapped to **Employee Identifier**. Required for per-teacher calculations.")
+    # Absence_Days can be computed from Duration / Start+End / Absence Type
+    if "Absence_Days" not in stds and "Duration" not in stds and "Start Time" not in stds and "Absence Type" not in stds:
+        warnings.append("No column mapped to **Absence_Days**, **Duration**, **Start Time**, or **Absence Type**. Absence days may be zero.")
+    return warnings
 
 
 def _dataframe_safe_for_display(df: pd.DataFrame, max_rows: Optional[int] = None) -> pd.DataFrame:
@@ -144,6 +180,8 @@ with st.sidebar:
         st.caption(f"🤖 **LLM:** OpenAI / {_model or 'GPT-4'}")
     else:
         st.caption(f"🤖 **LLM:** Google / {_model or 'Gemini'}")
+    if os.getenv("LANGCHAIN_API_KEY"):
+        st.caption("📊 **LangSmith:** tracing on → [smith.langchain.com](https://smith.langchain.com)")
     if st.button("Log out"):
         log_logout(st.session_state.user_email or "")
         st.session_state.logged_in = False
@@ -380,35 +418,61 @@ if not st.session_state.agent_state["raw_data"].empty:
         help="Choose which columns to include. Hire Date is excluded by default (not needed for rating)."
     )
     
-    # Mapping display: standard names beside mapped columns only; unmapped stay as-is
+    # Mapping: AI suggestion first, then user can override with dropdowns per standard
     st.subheader("Column mapping")
     suggested_map = st.session_state.agent_state.get("suggested_column_map") or {}
-    # Filter out wrong mappings: Hire Date must NOT map to Date (Hire Date = hire date, Date = absence date)
     def _is_valid_mapping(col: str, std: str) -> bool:
         c_lower = str(col).strip().lower().replace(" ", "").replace("_", "")
         return not (std == "Date" and ("hire" in c_lower or "hiredate" in c_lower))
-    column_map = {col: suggested_map[col] for col in selected_columns if col in suggested_map and suggested_map[col] in STANDARD_COLUMNS and _is_valid_mapping(col, suggested_map[col])}
+    suggested_column_map = {col: suggested_map[col] for col in selected_columns if col in suggested_map and suggested_map[col] in STANDARD_COLUMNS and _is_valid_mapping(col, suggested_map[col])}
+    # Standards we let the user assign to a column (so different file formats are no hassle)
+    MAPPABLE_STANDARDS = [
+        "School Year", "Employee Identifier", "Date", "Absence_Days", "Absence Type",
+        "Employee Type", "Employee First Name", "Employee Last Name",
+        "Reason", "Employee Title", "School Name", "Filled", "Needs Substitute",
+        "Start Time", "End Time", "Duration",
+    ]
+    # Dropdown per standard: "Which column is [Standard]?"
+    st.caption("**Choose which column is what** — so different file formats work. AI suggestion is the default; change if needed.")
+    column_choices = {}
+    opts = ["— Don't map —"] + sorted(selected_columns)
+    for std in MAPPABLE_STANDARDS:
+        current = next((c for c, s in suggested_column_map.items() if s == std), None)
+        idx = opts.index(current) if current and current in opts else 0
+        choice = st.selectbox(
+            f"**{std}**",
+            options=opts,
+            index=idx,
+            key=f"map_sel_{std}",
+            help=f"Which of your columns should be used as {std}?"
+        )
+        if choice and choice != "— Don't map —":
+            column_choices[choice] = std
+    # Final map: user choices override; then add any suggested mappings for columns not chosen by user
+    column_map = dict(column_choices)
+    for col in selected_columns:
+        if col not in column_map and col in suggested_map and suggested_map[col] in STANDARD_COLUMNS and _is_valid_mapping(col, suggested_map[col]):
+            column_map[col] = suggested_map[col]
     unmapped_columns = [col for col in selected_columns if col not in column_map]
     
-    if column_map or unmapped_columns:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if column_map:
-                st.caption("**Important columns** – standard name beside your column")
-                for orig, std in column_map.items():
-                    st.write(f"*{orig}* → **{std}**")
-        with col_b:
-            if unmapped_columns:
-                st.caption("**Other columns** – keep as-is (no mapping)")
-                st.write(", ".join(f"*{c}*" for c in unmapped_columns))
-    if not column_map and not unmapped_columns and selected_columns:
-        st.info("Select columns above. Mapped columns will show standard names beside them; others keep original names.")
+    if column_map:
+        with st.expander("📋 View mapping summary", expanded=False):
+            for orig, std in sorted(column_map.items(), key=lambda x: x[1]):
+                st.write(f"*{orig}* → **{std}**")
+    if unmapped_columns:
+        st.caption(f"Columns kept as-is (no standard name): {', '.join(f'*{c}*' for c in unmapped_columns)}")
+    # Sanity checks on mapping (e.g. Date/School Year, Employee Identifier, days source)
+    mapping_warnings = _mapping_sanity_checks(column_map)
+    if mapping_warnings:
+        for w in mapping_warnings:
+            st.warning(w)
     with st.expander("How is Absence_Days (no. of days) calculated?", expanded=False):
-        st.caption("Calculated in Step 3 (Cleaning) using **Absence Type** + **Duration**:")
-        st.markdown("- **Full Day** → 1.0 day")
-        st.markdown("- **AM Half Day** / **PM Half Day** → 0.5 day")
-        st.markdown("- **Custom Duration** → Duration (hours) ÷ 7.5")
-        st.caption("Start Time and End Time are not used for this calculation.")
+        st.caption("Calculated in Step 3 (Cleaning). **We focus on Duration and times** (Absence Type is often reason for leave, e.g. Sick/Personal):")
+        st.markdown("1. If you mapped a **days** column → we use it.")
+        st.markdown("2. Else **Duration (hours)** → days = Duration ÷ 7.5")
+        st.markdown("3. Else **Start Time** and **End Time** → hours between them ÷ 7.5")
+        st.markdown("4. Else if Absence Type is **Full Day** / **Half Day** / **Custom Duration** → we use that.")
+        st.caption("So map **Duration** (and optionally **Start Time** / **End Time**) when your file has them; Absence Type can stay as reason for leave.")
     
     # Row filters (optional)
     with st.expander("🔍 Row Filters (Optional)"):
@@ -423,14 +487,52 @@ if not st.session_state.agent_state["raw_data"].empty:
             except Exception:
                 pass
         
-        # Employee type filter
-        if 'Employee Type' in available_columns:
-            employee_types = df_raw['Employee Type'].unique().tolist()
-            selected_employee_types = st.multiselect(
-                "Employee Types:",
-                options=employee_types,
-                default=employee_types
-            )
+        # Employee type filter: use the raw column that maps TO "Employee Type" (e.g. "Class Description")
+        # Use chips + Remove buttons so the list doesn't jump to the end when you remove an item (multiselect scroll bug).
+        employee_type_raw_col = next((orig for orig, std in column_map.items() if std == "Employee Type"), None)
+        if employee_type_raw_col and employee_type_raw_col in df_raw.columns:
+            employee_types = df_raw[employee_type_raw_col].dropna().astype(str).unique().tolist()
+            employee_types = sorted([x for x in employee_types if x.strip()])
+        elif 'Employee Type' in available_columns:
+            employee_types = df_raw['Employee Type'].dropna().astype(str).unique().tolist()
+            employee_types = sorted([x for x in employee_types if x.strip()])
+        else:
+            employee_types = []
+
+        if employee_types:
+            # Persist selection in session state so removing one doesn't scroll the list
+            opts_key = "step2_emp_types_opts"
+            sel_key = "step2_emp_types_selected"
+            # Compare by content (tuple) so we only reset when the actual options change (e.g. new file), not every run
+            opts_tuple = tuple(employee_types)
+            if opts_key not in st.session_state or st.session_state[opts_key] != opts_tuple:
+                st.session_state[opts_key] = opts_tuple
+                st.session_state[sel_key] = list(employee_types)
+            selected_employee_types = st.session_state[sel_key]
+
+            def _remove_emp_type(et):
+                if sel_key in st.session_state:
+                    st.session_state[sel_key] = [x for x in st.session_state[sel_key] if x != et]
+
+            st.caption(f"From column « {employee_type_raw_col or 'Employee Type'} » (mapped to Employee Type). Remove types to exclude from filter.")
+            # Stable list (sorted): each row has label + Remove; use on_click so removal persists
+            for i, et in enumerate(sorted(selected_employee_types)):
+                col1, col2 = st.columns([6, 1])
+                with col1:
+                    st.text(et)
+                with col2:
+                    key_safe = "rem_et_%d_%s" % (i, "".join(c if c.isalnum() or c == "_" else "_" for c in str(et))[:50])
+                    st.button("✕ Remove", key=key_safe, on_click=_remove_emp_type, args=(et,))
+
+            # Add back: multiselect of currently excluded types + button
+            excluded = [x for x in employee_types if x not in selected_employee_types]
+            if excluded:
+                add_back = st.multiselect("Add back (currently excluded):", options=excluded, default=[], key="step2_emp_add_back")
+                if st.button("Add selected", key="step2_emp_add_btn") and add_back:
+                    st.session_state[sel_key] = sorted(set(st.session_state[sel_key]) | set(add_back))
+                    if "step2_emp_add_back" in st.session_state:
+                        st.session_state["step2_emp_add_back"] = []
+                    st.rerun()
         else:
             selected_employee_types = None
     
@@ -494,7 +596,34 @@ if not st.session_state.agent_state["raw_data"].empty:
 # ============================================================================
 if not st.session_state.agent_state["selected_data"].empty:
     st.header("Step 3: Data Cleaning (LLM-Powered)")
-    
+    selected_data = st.session_state.agent_state["selected_data"]
+
+    # First-class data validation (before cleaning): show report so user sees what will be checked
+    validation_key = "step3_validation_report"
+    df_fingerprint = _dataset_fingerprint(selected_data)
+    if validation_key not in st.session_state or st.session_state.get("step3_validation_df_id") != df_fingerprint:
+        try:
+            _, report = run_validation(selected_data)
+            st.session_state[validation_key] = report
+            st.session_state["step3_validation_df_id"] = df_fingerprint
+        except Exception as e:
+            st.session_state[validation_key] = {"format_issues": [str(e)], "rows_removed": 0, "columns_checked": [], "data_type_issues": [], "invalid_values": [], "final_rows": len(selected_data)}
+    with st.expander("📋 Data Validation (before cleaning)", expanded=True):
+        report = st.session_state.get(validation_key, {})
+        st.caption("Checks: required columns, data types, date format, empty rows, invalid values.")
+        if report.get("format_issues"):
+            for msg in report["format_issues"]:
+                st.warning(msg)
+        if report.get("data_type_issues"):
+            for msg in report["data_type_issues"]:
+                st.warning(msg)
+        if report.get("invalid_values"):
+            for msg in report["invalid_values"]:
+                st.warning(msg)
+        if report.get("columns_checked"):
+            st.caption(f"Columns checked: {', '.join(report['columns_checked'])}")
+        st.caption(f"Rows after validation: {report.get('final_rows', len(selected_data)):,} (removed: {report.get('rows_removed', 0):,})")
+
     # Get school name
     school_name = st.text_input(
         "School Name (optional, helps LLM reasoning):", 
@@ -584,11 +713,21 @@ if not st.session_state.agent_state["cleaned_data"].empty:
     with col2:
         st.subheader("Coverage & Commission")
         cc_days = st.number_input("CC Days (per teacher):", min_value=0, value=60, step=1)
-        ark_commission = st.number_input("ARK Commission Rate (%):", min_value=0.0, max_value=100.0, value=15.0, step=0.1) / 100
-        abcover_commission = st.number_input("ABCover Commission Rate (%):", min_value=0.0, max_value=100.0, value=15.0, step=0.1) / 100
+        ark_commission = st.number_input("Carrier Profit Margin (%):", min_value=0.0, max_value=100.0, value=15.0, step=0.1) / 100
+        abcover_commission = st.number_input("ABCover Acquisition Costs (%):", min_value=0.0, max_value=100.0, value=15.0, step=0.1) / 100
+    
+    # Edge-case note: 0 deductible / 0 CC days are valid and handled correctly
+    if deductible == 0 or cc_days == 0:
+        cc_max_preview = int(deductible) + int(cc_days)
+        if deductible == 0 and cc_days > 0:
+            st.caption("✓ **Deductible = 0:** All staff with 1+ absence days are in the CC range (1–{}) for premium. Staff with 0 days are below deductible.".format(cc_max_preview))
+        elif cc_days == 0:
+            st.caption("✓ **CC Days = 0:** CC Maximum = {}; no staff in CC range, so premium will be $0. High claimants are staff with days > {}.".format(cc_max_preview, cc_max_preview))
     
     # Calculate button
     if st.button("Calculate Premium", type="primary", use_container_width=True):
+        # Versioning: generate run_id for this calculation (reproducibility / audit)
+        st.session_state["_run_id"] = str(uuid.uuid4())
         # Update state with rating inputs
         st.session_state.agent_state["rating_inputs"] = {
             "deductible": int(deductible),
@@ -612,9 +751,10 @@ if not st.session_state.agent_state["cleaned_data"].empty:
                 
                 if st.session_state.agent_state.get("rating_results"):
                     st.success("✅ Calculations complete!")
-                    # Audit: record successful run
+                    # Audit: record successful run (with run_id, model, dataset fingerprint for reproducibility)
                     state = st.session_state.agent_state
                     res = state.get("rating_results", {})
+                    cleaned = state.get("cleaned_data")
                     log_run(
                         status="success",
                         user_email=st.session_state.get("user_email"),
@@ -622,9 +762,12 @@ if not st.session_state.agent_state["cleaned_data"].empty:
                         filters=state.get("filters"),
                         rows_raw=len(state.get("raw_data")) if state.get("raw_data") is not None else None,
                         rows_selected=len(state.get("selected_data")) if state.get("selected_data") is not None else None,
-                        rows_cleaned=len(state.get("cleaned_data")) if state.get("cleaned_data") is not None else None,
+                        rows_cleaned=len(cleaned) if cleaned is not None else None,
                         total_teachers=res.get("overall_total_staff") or res.get("total_teachers"),
                         total_premium=res.get("total_premium"),
+                        run_id=st.session_state.get("_run_id"),
+                        model_name=(os.getenv("LLM_MODEL") or os.getenv("LLM_PROVIDER") or "default").strip() or None,
+                        dataset_fingerprint=_dataset_fingerprint(cleaned),
                     )
                     logger.info("Calculate success: user=%s premium=%s", st.session_state.get("user_email"), res.get("total_premium"))
                     # Show blackboard context
@@ -650,7 +793,11 @@ if not st.session_state.agent_state["cleaned_data"].empty:
                     filters=state.get("filters"),
                     rows_raw=len(raw) if raw is not None and hasattr(raw, "__len__") else None,
                     rows_selected=len(sel) if sel is not None and hasattr(sel, "__len__") else None,
-                    rows_cleaned=len(clean) if clean is not None and hasattr(clean, "__len__") else None)
+                    rows_cleaned=len(clean) if clean is not None and hasattr(clean, "__len__") else None,
+                    run_id=st.session_state.get("_run_id"),
+                    model_name=(os.getenv("LLM_MODEL") or os.getenv("LLM_PROVIDER") or "default").strip() or None,
+                    dataset_fingerprint=_dataset_fingerprint(clean),
+                )
                 st.error(f"❌ Calculation error: {str(e)}")
 
 # ============================================================================
@@ -658,9 +805,22 @@ if not st.session_state.agent_state["cleaned_data"].empty:
 # ============================================================================
 if st.session_state.agent_state.get("rating_results"):
     st.header("Step 5: Results")
-    
     results = st.session_state.agent_state["rating_results"]
     rating_inputs = st.session_state.agent_state.get("rating_inputs", {})
+
+    # PDF download: save Final Calculation Results as PDF
+    try:
+        pdf_bytes = build_results_pdf(results, rating_inputs)
+        st.download_button(
+            label="📥 Download / Save PDF",
+            data=pdf_bytes,
+            file_name="ABCover_Calculation_Results.pdf",
+            mime="application/pdf",
+            type="primary",
+            key="download_results_pdf",
+        )
+    except Exception as e:
+        st.caption(f"PDF export unavailable: {e}")
     
     # Get inputs for display
     replacement_cost = rating_inputs.get("replacement_cost", results.get("replacement_cost", 150.0))
@@ -769,8 +929,8 @@ if st.session_state.agent_state.get("rating_results"):
                     "Total CC Days": f"{b['total_cc_days']:,.2f}",
                     "Excess Days": f"{b['excess_days']:,.2f}",
                     "Replacement Cost ($)": f"${b.get('replacement_cost_cc', 0):,.2f}",
-                    "ARK Commission ($)": f"${b.get('ark_commission', 0):,.2f}",
-                    "ABCover Commission ($)": f"${b.get('abcover_commission', 0):,.2f}",
+                    "Carrier Profit Margin ($)": f"${b.get('ark_commission', 0):,.2f}",
+                    "ABCover Acquisition Costs ($)": f"${b.get('abcover_commission', 0):,.2f}",
                     "Premium ($)": f"${b['premium']:,.2f}",
                 })
             # Average row (last row)
@@ -807,8 +967,8 @@ if st.session_state.agent_state.get("rating_results"):
                     "Total CC Days": f"{avg_metrics['total_cc_days']:,.2f}",
                     "Excess Days": f"{avg_metrics['excess_days']:,.2f}",
                     "Replacement Cost ($)": f"${avg_metrics['replacement_cost_cc']:,.2f}",
-                    "ARK Commission ($)": f"${avg_metrics['ark_commission']:,.2f}",
-                    "ABCover Commission ($)": f"${avg_metrics['abcover_commission']:,.2f}",
+                    "Carrier Profit Margin ($)": f"${avg_metrics['ark_commission']:,.2f}",
+                    "ABCover Acquisition Costs ($)": f"${avg_metrics['abcover_commission']:,.2f}",
                     "Premium ($)": f"${avg_metrics['premium']:,.2f}",
                 })
             st.dataframe(_dataframe_safe_for_display(pd.DataFrame(by_year_rows)), width="stretch", hide_index=True)
@@ -887,8 +1047,8 @@ if st.session_state.agent_state.get("rating_results"):
         total_premium_val = results.get("total_premium", 0)
     st.markdown(f"""
     - **Replacement Cost (CC):** ${rc_cc:,.2f}  
-    - **ARK Commission:** ${ark:,.2f}  
-    - **ABCover Commission:** ${abcover:,.2f}  
+    - **Carrier Profit Margin:** ${ark:,.2f}  
+    - **ABCover Acquisition Costs:** ${abcover:,.2f}  
     - **TOTAL PREMIUM:** ${total_premium_val:,.2f}
     """)
     st.success(f"**Total premium:** ${total_premium_val:,.2f}")
