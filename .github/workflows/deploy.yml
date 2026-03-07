@@ -32,6 +32,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Fail fast with a clear message if secrets are missing (no values are printed)
+      - name: Check AWS secrets are set
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then echo "::error::Repository secret 'AWS_ACCESS_KEY_ID' is not set. Add it in Settings → Secrets and variables → Actions."; exit 1; fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then echo "::error::Repository secret 'AWS_SECRET_ACCESS_KEY' is not set. Add it in Settings → Secrets and variables → Actions."; exit 1; fi
+          echo "Secrets are set."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

@@ -13,7 +13,7 @@ RUN pip install --upgrade pip && \
 
 # Copy app code and config
 COPY .streamlit/ .streamlit/
-COPY app.py auth.py audit.py add_user.py ./
+COPY app.py auth.py audit.py add_user.py pdf_export.py ./
 COPY agents/ agents/
 COPY abcover_logo.png ./
 # raw_data and persistent data dir (for volume mount)
