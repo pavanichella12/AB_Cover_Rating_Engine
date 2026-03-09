@@ -13,7 +13,7 @@ on:
       - 'add_user.py'
       - 'agents/**'
       - '.streamlit/**'
-      - 'Dockerfile'
+      - 'docker/**'
       - 'requirements.txt'
       - 'abcover_logo.png'
   workflow_dispatch:  # Deploy anytime: Actions → Build and Deploy to ECS → Run workflow
@@ -53,7 +53,7 @@ jobs:
 
       - name: Build, tag, and push image
         run: |
-          docker build --platform linux/amd64 -t ${{ env.ECR_IMAGE }}:latest .
+          docker build --platform linux/amd64 -f docker/Dockerfile -t ${{ env.ECR_IMAGE }}:latest .
           docker push ${{ env.ECR_IMAGE }}:latest
 
       - name: Deploy to ECS

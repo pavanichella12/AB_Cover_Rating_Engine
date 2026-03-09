@@ -25,6 +25,10 @@ An intelligent, agentic AI system for analyzing school absence data and calculat
 - **Orchestrator**: Streamlit App
 - **LLM Integration**: LangChain with OpenAI or Anthropic
 
+## Documentation
+
+Guides and references are in the **[docs/](docs/)** folder. See [docs/README.md](docs/README.md) for a list.
+
 ## Setup
 
 ### 1. Install Dependencies
