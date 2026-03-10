@@ -8,6 +8,7 @@ on:
       - main
     paths:
       - 'app.py'
+      - 'pdf_export.py'
       - 'auth.py'
       - 'audit.py'
       - 'add_user.py'
