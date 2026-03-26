@@ -322,6 +322,23 @@ Note: Calculation approach is FIXED based on Excel template:
         # CALCULATE PER-SCHOOL-YEAR METRICS (from cleaned data)
         # ============================================================================
         # These metrics are calculated from cleaned_data (after user selection and cleaning)
+        def _safe_numeric_sum(values) -> float:
+            """
+            Safely sum numeric values from a Series/DataFrame/scalar.
+            Handles duplicate-column selections (DataFrame) without raising
+            'cannot convert the series to <class float>'.
+            """
+            if isinstance(values, pd.DataFrame):
+                numeric_df = values.apply(pd.to_numeric, errors='coerce')
+                return float(numeric_df.to_numpy(dtype=float).sum())
+            if isinstance(values, pd.Series):
+                numeric_series = pd.to_numeric(values, errors='coerce')
+                return float(numeric_series.sum())
+            try:
+                return float(pd.to_numeric(values, errors='coerce'))
+            except Exception:
+                return 0.0
+
         per_school_year_metrics = {}
         
         if 'School Year' in cleaned_data.columns:
@@ -336,7 +353,7 @@ Note: Calculation approach is FIXED based on Excel template:
                 total_staff = sy_data['Employee Identifier'].nunique() if 'Employee Identifier' in sy_data.columns else 0
                 
                 # Total # of Absences = sum of actual days (Absence_Days), not row count
-                total_absences = float(sy_data['Absence_Days'].sum()) if 'Absence_Days' in sy_data.columns else len(sy_data)
+                total_absences = _safe_numeric_sum(sy_data['Absence_Days']) if 'Absence_Days' in sy_data.columns else float(len(sy_data))
                 
                 # Total Replacement Cost to District (Total Absence Days × Replacement Cost Per Day)
                 total_replacement_cost = total_absences * replacement_cost
@@ -349,7 +366,7 @@ Note: Calculation approach is FIXED based on Excel template:
         
         # Calculate overall totals (across all school years) - use actual days, not row count
         overall_total_staff = cleaned_data['Employee Identifier'].nunique() if 'Employee Identifier' in cleaned_data.columns else 0
-        overall_total_absences = float(cleaned_data['Absence_Days'].sum()) if 'Absence_Days' in cleaned_data.columns else len(cleaned_data)
+        overall_total_absences = _safe_numeric_sum(cleaned_data['Absence_Days']) if 'Absence_Days' in cleaned_data.columns else float(len(cleaned_data))
         overall_total_replacement_cost = overall_total_absences * replacement_cost
         
         # Build employee first/last name lookup from cleaned_data (for detail tables)
