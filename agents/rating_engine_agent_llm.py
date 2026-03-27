@@ -339,15 +339,38 @@ Note: Calculation approach is FIXED based on Excel template:
             except Exception:
                 return 0.0
 
+        def _single_col(d: pd.DataFrame, name: str, combine_sum: bool = False):
+            """
+            Safely fetch one logical column even when duplicates exist.
+            - combine_sum=True: sum duplicate numeric columns row-wise (used for Absence_Days)
+            - combine_sum=False: use first duplicate column
+            """
+            if d is None or d.empty:
+                return pd.Series(dtype="float64")
+            cols = [i for i, c in enumerate(d.columns) if c == name]
+            if not cols:
+                return pd.Series(index=d.index, dtype="float64")
+            if combine_sum and len(cols) > 1:
+                num = d.iloc[:, cols].apply(pd.to_numeric, errors='coerce').fillna(0.0)
+                return num.sum(axis=1)
+            return d.iloc[:, cols[0]]
+
+        cleaned_metrics_df = pd.DataFrame({
+            'School Year': _single_col(cleaned_data, 'School Year'),
+            'Employee Identifier': _single_col(cleaned_data, 'Employee Identifier'),
+            'Absence_Days': _single_col(cleaned_data, 'Absence_Days', combine_sum=True),
+        })
+        cleaned_metrics_df['Absence_Days'] = pd.to_numeric(cleaned_metrics_df['Absence_Days'], errors='coerce').fillna(0.0)
+
         per_school_year_metrics = {}
         
-        if 'School Year' in cleaned_data.columns:
+        if 'School Year' in cleaned_metrics_df.columns:
             # Group by School Year
-            for school_year in cleaned_data['School Year'].unique():
+            for school_year in cleaned_metrics_df['School Year'].unique():
                 if pd.isna(school_year):
                     continue
                     
-                sy_data = cleaned_data[cleaned_data['School Year'] == school_year]
+                sy_data = cleaned_metrics_df[cleaned_metrics_df['School Year'] == school_year]
                 
                 # Total # Of Staff (unique Employee Identifiers per school year)
                 total_staff = sy_data['Employee Identifier'].nunique() if 'Employee Identifier' in sy_data.columns else 0
@@ -365,8 +388,8 @@ Note: Calculation approach is FIXED based on Excel template:
                 }
         
         # Calculate overall totals (across all school years) - use actual days, not row count
-        overall_total_staff = cleaned_data['Employee Identifier'].nunique() if 'Employee Identifier' in cleaned_data.columns else 0
-        overall_total_absences = _safe_numeric_sum(cleaned_data['Absence_Days']) if 'Absence_Days' in cleaned_data.columns else float(len(cleaned_data))
+        overall_total_staff = cleaned_metrics_df['Employee Identifier'].nunique() if 'Employee Identifier' in cleaned_metrics_df.columns else 0
+        overall_total_absences = _safe_numeric_sum(cleaned_metrics_df['Absence_Days']) if 'Absence_Days' in cleaned_metrics_df.columns else float(len(cleaned_metrics_df))
         overall_total_replacement_cost = overall_total_absences * replacement_cost
         
         # Build employee first/last name lookup from cleaned_data (for detail tables)
