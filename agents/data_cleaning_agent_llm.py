@@ -11,6 +11,7 @@ low, and cost down.
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 from .llm_agent_base import LLMAgentBase
+from .date_parsing import parse_absence_date_series
 import json
 
 # Cap categories sent to LLM so prompts stay bounded (e.g. top 50 employee types)
@@ -618,7 +619,7 @@ def run_validation(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     if 'Date' in df.columns:
         validation_report['columns_checked'].append('Date')
         try:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df['Date'] = parse_absence_date_series(df['Date'])
             invalid_dates = df['Date'].isna().sum()
             if invalid_dates > 0:
                 validation_report['data_type_issues'].append(f"Date: {invalid_dates} invalid date values")

@@ -13,48 +13,17 @@ from .file_upload_agent import FileUploadAgent
 from .data_selection_agent import DataSelectionAgent
 from .data_cleaning_agent_llm import DataCleaningAgentLLM
 from .rating_engine_agent_llm import RatingEngineAgentLLM
+from .date_parsing import parse_absence_date_series
 
 load_dotenv()
-
-# Common date formats in school absence exports (try these first for fast single-pass parse)
-_DATE_FORMATS = [
-    "%Y-%m-%d",
-    "%m/%d/%Y",
-    "%m-%d-%Y",
-    "%d/%m/%Y",
-    "%Y/%m/%d",
-    "%B %d, %Y",  # July 1, 2020
-    "%b %d, %Y",  # Jul 1, 2020
-    "%m/%d/%y",
-    "%d-%b-%Y",
-]
 
 
 def _parse_date_series_fast(ser: pd.Series) -> pd.Series:
     """
-    Parse a series to datetime using explicit formats when possible to avoid
-    per-element dateutil fallback (slow on large data). Only use for the real
-    absence 'Date' column, not Hire Date or other date columns.
+    Parse absence Date column when the same file mixes ISO and US-style strings
+    (e.g. JPS MASTER.csv). Only use for the real absence 'Date' column.
     """
-    if ser.empty:
-        return pd.to_datetime(ser, errors="coerce")
-    if pd.api.types.is_datetime64_any_dtype(ser):
-        return ser
-    # Try each format; use the one that parses the most non-null values
-    best = None
-    best_count = -1
-    for fmt in _DATE_FORMATS:
-        try:
-            parsed = pd.to_datetime(ser, format=fmt, errors="coerce")
-            count = parsed.notna().sum()
-            if count > best_count:
-                best_count = count
-                best = parsed
-        except (ValueError, TypeError):
-            continue
-    if best is not None and best_count > 0:
-        return best
-    return pd.to_datetime(ser, errors="coerce")
+    return parse_absence_date_series(ser)
 
 
 class AgentState(TypedDict, total=False):

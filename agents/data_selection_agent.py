@@ -6,6 +6,8 @@ Responsibility: Let user select which columns/rows to keep
 import pandas as pd
 from typing import List, Optional, Dict, Tuple
 
+from .date_parsing import parse_absence_date_series
+
 
 class DataSelectionAgent:
     """
@@ -91,7 +93,7 @@ class DataSelectionAgent:
                 if 'Date' in filtered_df.columns:
                     # Convert date_range to datetime if needed
                     if not pd.api.types.is_datetime64_any_dtype(filtered_df['Date']):
-                        filtered_df['Date'] = pd.to_datetime(filtered_df['Date'], errors='coerce')
+                        filtered_df['Date'] = parse_absence_date_series(filtered_df['Date'])
                     
                     # Convert start_date and end_date to Timestamp for comparison
                     start_date = pd.Timestamp(start_date) if start_date else None
