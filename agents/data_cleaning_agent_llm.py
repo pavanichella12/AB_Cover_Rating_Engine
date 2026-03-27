@@ -19,6 +19,24 @@ _SAMPLE_ROWS_FOR_LLM = 5
 _DATE_MISMATCH_SAMPLE = 20
 
 
+def _rule1_keep_mask(filled_series: pd.Series, needs_series: pd.Series) -> pd.Series:
+    """
+    Row mask: True = keep row. Rule 1 removes absences that are unfilled AND do not need a substitute.
+
+    After Step 2 column mapping, columns are often renamed to Filled / Needs Substitute while **values**
+    stay district-specific (e.g. Yes/No, Unfilled/YES). This uses semantic tokens so mapping alone is enough.
+    """
+    fv = filled_series.astype(str).str.strip().str.lower()
+    nv = needs_series.astype(str).str.strip().str.lower()
+    blank = fv.isin(["", "nan", "none", "nat"]) | nv.isin(["", "nan", "none", "nat"])
+    # Unfilled / not covered: Frontline "unfilled" or boolean-style "no"
+    is_unfilled = fv.isin(["unfilled", "no", "n", "false", "0"])
+    # Substitute not required: Frontline "NO" or boolean "no"
+    sub_not_required = nv.isin(["no", "n", "false", "0"])
+    remove = is_unfilled & sub_not_required & ~blank
+    return ~remove
+
+
 class DataCleaningAgentLLM(LLMAgentBase):
     """
     LLM-powered agent for data cleaning.
@@ -123,7 +141,11 @@ Respond in JSON format with your analysis and suggested rules."""
             "columns": df.columns.tolist(),
             "sample_data": df.head(_SAMPLE_ROWS_FOR_LLM).to_dict("records") if len(df) > 0 else [],
             "employee_types": _top_counts(df["Employee Type"]) if "Employee Type" in df.columns else {},
-            "filled_status": _top_counts(df["Filled"]) if "Filled" in df.columns else {},
+            "filled_status": (
+                _top_counts(df["Filled"]) if "Filled" in df.columns
+                else _top_counts(df["Is Filled"]) if "Is Filled" in df.columns
+                else {}
+            ),
             "absence_types": _top_counts(df["Absence Type"]) if "Absence Type" in df.columns else {},
             "missing_values": df.isnull().sum().to_dict(),
         }
@@ -270,21 +292,25 @@ Provide your reasoning and suggested rules in JSON format:
 
     def apply_rule1(self, df: pd.DataFrame, should_apply: bool = True) -> pd.DataFrame:
         """
-        Rule 1: Remove records where Filled='Unfilled' AND Needs Substitute='NO'
-        
-        Args:
-            df: DataFrame to clean
-            should_apply: Whether to apply this rule (from LLM reasoning)
-            
-        Returns:
-            Cleaned DataFrame
+        Rule 1: Remove absences that are unfilled and do not require substitute coverage.
+
+        Uses standard names **Filled** and **Needs Substitute** (after user column mapping) with **semantic**
+        value matching so Yes/No exports behave like Unfilled/YES (Frontline). If those columns are missing,
+        falls back to common raw names Is Filled / Substitute Is Required.
         """
         if not should_apply:
             return df.copy()
-        
-        if 'Filled' in df.columns and 'Needs Substitute' in df.columns:
-            mask = ~((df['Filled'] == 'Unfilled') & (df['Needs Substitute'] == 'NO'))
+
+        df = df.copy()
+
+        if "Filled" in df.columns and "Needs Substitute" in df.columns:
+            mask = _rule1_keep_mask(df["Filled"], df["Needs Substitute"])
             return df[mask].copy()
+
+        if "Is Filled" in df.columns and "Substitute Is Required" in df.columns:
+            mask = _rule1_keep_mask(df["Is Filled"], df["Substitute Is Required"])
+            return df[mask].copy()
+
         return df.copy()
     
     def apply_rule2(self, df: pd.DataFrame, employee_types_to_keep: list) -> pd.DataFrame:
@@ -398,18 +424,24 @@ Provide your reasoning and suggested rules in JSON format:
             return float(v) if pd.notna(v) else None
 
         def calculate_days(row):
-            # 1) Already have Absence_Days in days (e.g. "Days of Absence" column)
-            existing = row.get('Absence_Days')
-            if existing is not None:
-                v = _numeric(existing)
-                if v is not None and v >= 0:
-                    return v
+            # 1) Day count already on file (column names vary by SIS export)
+            for col in ('Absence_Days', 'Absence Reason Usage (Days)', 'Days of Absence'):
+                if col not in row.index:
+                    continue
+                existing = row.get(col)
+                if existing is not None:
+                    v = _numeric(existing)
+                    if v is not None and v >= 0:
+                        return v
 
             # 2) Duration in hours -> days
-            if 'Duration' in row:
-                hours = _numeric(row['Duration'])
-                if hours is not None and hours >= 0:
-                    return hours / HOURS_PER_DAY
+            hours = None
+            if 'Duration' in row.index:
+                hours = _numeric(row.get('Duration'))
+            if hours is None and 'Absence Reason Usage (Hours)' in row.index:
+                hours = _numeric(row.get('Absence Reason Usage (Hours)'))
+            if hours is not None and hours >= 0:
+                return hours / HOURS_PER_DAY
 
             # 3) Start Time & End Time -> duration in hours -> days
             if 'Start Time' in row and 'End Time' in row:

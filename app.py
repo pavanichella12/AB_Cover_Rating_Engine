@@ -330,7 +330,10 @@ COLUMN_ALIASES = {
     "date": "Date", "school name": "School Name", "reason": "Reason",
     "employee title": "Employee Title", "employee type": "Employee Type",
     "absence type": "Absence Type", "start time": "Start Time", "end time": "End Time",
-    "filled": "Filled", "needs substitute": "Needs Substitute",
+    "filled": "Filled",
+    "is filled": "Filled",
+    "needs substitute": "Needs Substitute",
+    "substitute is required": "Needs Substitute",
 }
 
 
