@@ -384,6 +384,16 @@ Provide your reasoning and suggested rules in JSON format:
         HOURS_PER_DAY = 7.5
 
         def _numeric(val):
+            """
+            Safely coerce scalar/Series/DataFrame-like values to one float.
+            This prevents crashes when duplicate columns make row values Series.
+            """
+            if isinstance(val, pd.DataFrame):
+                s = pd.to_numeric(val.stack(), errors='coerce').dropna()
+                return float(s.iloc[0]) if len(s) else None
+            if isinstance(val, pd.Series):
+                s = pd.to_numeric(val, errors='coerce').dropna()
+                return float(s.iloc[0]) if len(s) else None
             v = pd.to_numeric(val, errors='coerce')
             return float(v) if pd.notna(v) else None
 
