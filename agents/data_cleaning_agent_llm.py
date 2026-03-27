@@ -24,17 +24,51 @@ def _rule1_keep_mask(filled_series: pd.Series, needs_series: pd.Series) -> pd.Se
     Row mask: True = keep row. Rule 1 removes absences that are unfilled AND do not need a substitute.
 
     After Step 2 column mapping, columns are often renamed to Filled / Needs Substitute while **values**
-    stay district-specific (e.g. Yes/No, Unfilled/YES). This uses semantic tokens so mapping alone is enough.
+    stay district-specific (e.g. Yes/No, Unfilled/YES). Handles string tokens and Excel numeric 0/1.
     """
     fv = filled_series.astype(str).str.strip().str.lower()
     nv = needs_series.astype(str).str.strip().str.lower()
     blank = fv.isin(["", "nan", "none", "nat"]) | nv.isin(["", "nan", "none", "nat"])
-    # Unfilled / not covered: Frontline "unfilled" or boolean-style "no"
-    is_unfilled = fv.isin(["unfilled", "no", "n", "false", "0"])
-    # Substitute not required: Frontline "NO" or boolean "no"
-    sub_not_required = nv.isin(["no", "n", "false", "0"])
+
+    def _unfilled(s: pd.Series) -> pd.Series:
+        v = s.astype(str).str.strip().str.lower()
+        by_text = v.isin(["unfilled", "no", "n", "false", "0", "0.0"])
+        n = pd.to_numeric(s, errors="coerce")
+        by_num = (n == 0) & n.notna()
+        return by_text | by_num
+
+    def _sub_not_required(s: pd.Series) -> pd.Series:
+        v = s.astype(str).str.strip().str.lower()
+        by_text = v.isin(["no", "n", "false", "0", "0.0"])
+        n = pd.to_numeric(s, errors="coerce")
+        by_num = (n == 0) & n.notna()
+        return by_text | by_num
+
+    is_unfilled = _unfilled(filled_series)
+    sub_not_required = _sub_not_required(needs_series)
     remove = is_unfilled & sub_not_required & ~blank
     return ~remove
+
+
+def _suggested_rule_bool(rules: Dict[str, Any], key: str, default: bool = True) -> bool:
+    """Coerce LLM suggested_rules values (bool, str, int) to bool."""
+    if not rules or key not in rules:
+        return default
+    v = rules.get(key)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return bool(int(v))
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes", "y")
+    return default
+
+
+def _rule1_columns_present(df: pd.DataFrame) -> bool:
+    return (
+        ("Filled" in df.columns and "Needs Substitute" in df.columns)
+        or ("Is Filled" in df.columns and "Substitute Is Required" in df.columns)
+    )
 
 
 class DataCleaningAgentLLM(LLMAgentBase):
@@ -508,10 +542,15 @@ Provide your reasoning and suggested rules in JSON format:
         stats['suggested_rules'] = reasoning.get('suggested_rules', {})
         stats['data_quality_issues'] = reasoning.get('data_quality_issues', [])
         
-        # Step 2: Apply Rule 1 (based on LLM suggestion)
-        should_remove_unfilled = stats['suggested_rules'].get('remove_unfilled_no_substitute', True)
-        df = self.apply_rule1(df, should_remove_unfilled)
-        stats['after_rule1'] = len(df)
+        # Step 2: Rule 1 — core substitute-coverage rule; must run whenever Filled/Needs Substitute exist.
+        # Do not let the LLM turn this off (it often mis-reads Yes/No files and sets remove=false).
+        rule1_cols = _rule1_columns_present(df)
+        llm_rule1 = _suggested_rule_bool(stats["suggested_rules"], "remove_unfilled_no_substitute", True)
+        apply_rule1_flag = bool(llm_rule1) if not rule1_cols else True
+        df = self.apply_rule1(df, apply_rule1_flag)
+        stats["after_rule1"] = len(df)
+        stats["rule1_columns_detected"] = rule1_cols
+        stats["rule1_llm_would_apply"] = llm_rule1
         
         # Step 3: Apply Rule 2 (Employee Type Filter)
         # IMPORTANT: If user already filtered Employee Types, respect their selection

@@ -73,6 +73,7 @@ class AgentState(TypedDict, total=False):
     # Analysis and reasoning
     data_analysis: dict
     cleaning_reasoning: dict
+    cleaning_stats: dict  # row counts + flags from DataCleaningAgentLLM.process
     calculation_reasoning: dict
     
     # Results
@@ -217,6 +218,15 @@ class LangGraphOrchestrator:
                 "cleaned_data": df_cleaned,
                 "cleaning_reasoning": cleaning_stats.get("llm_reasoning"),
                 "data_analysis": cleaning_stats.get("suggested_rules", {}),
+                "cleaning_stats": {
+                    "after_validation": cleaning_stats.get("after_validation"),
+                    "after_rule1": cleaning_stats.get("after_rule1"),
+                    "after_rule2": cleaning_stats.get("after_rule2"),
+                    "after_rule3": cleaning_stats.get("after_rule3"),
+                    "final_rows": cleaning_stats.get("final_rows"),
+                    "rule1_columns_detected": cleaning_stats.get("rule1_columns_detected"),
+                    "rule1_llm_would_apply": cleaning_stats.get("rule1_llm_would_apply"),
+                },
                 "processing_history": [{
                     "step": "clean",
                     "status": "success",
@@ -428,6 +438,7 @@ class LangGraphOrchestrator:
             "cleaned_data": pd.DataFrame(),
             "data_analysis": {},
             "cleaning_reasoning": {},
+            "cleaning_stats": {},
             "calculation_reasoning": {},
             "rating_results": {},
             "processing_history": []

@@ -207,6 +207,7 @@ if 'agent_state' not in st.session_state:
         "cleaned_data": pd.DataFrame(),
         "data_analysis": {},
         "cleaning_reasoning": {},
+        "cleaning_stats": {},
         "calculation_reasoning": {},
         "rating_results": {},
         "school_name": "",
@@ -673,6 +674,23 @@ if not st.session_state.agent_state["selected_data"].empty:
                     df_selected = st.session_state.agent_state["selected_data"]
                     
                     st.subheader("📊 Cleaning Statistics")
+                    cstats = st.session_state.agent_state.get("cleaning_stats") or {}
+                    if cstats.get("rule1_columns_detected") is False:
+                        st.warning(
+                            "Rule 1 (drop **unfilled + substitute not required**) was skipped: "
+                            "selected data has no **Filled** + **Needs Substitute** (or Ecorse-style equivalents). "
+                            "In Step 2, include those columns and map them to **Filled** and **Needs Substitute**."
+                        )
+                    with st.expander("Row counts after each cleaning step", expanded=False):
+                        st.write(
+                            {
+                                "After validation": cstats.get("after_validation"),
+                                "After Rule 1 (substitute relevance)": cstats.get("after_rule1"),
+                                "After Rule 2 (employee types)": cstats.get("after_rule2"),
+                                "After Rule 3 (dates in school year)": cstats.get("after_rule3"),
+                                "Final": cstats.get("final_rows"),
+                            }
+                        )
                     col1, col2 = st.columns(2)
                     with col1:
                         st.metric("Before Cleaning", f"{len(df_selected):,} rows")
