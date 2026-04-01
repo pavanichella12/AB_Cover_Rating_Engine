@@ -11,6 +11,38 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 
 
+def _n_school_years_in_report(results: dict) -> int:
+    """Number of school years in the report (from breakdown or per-year metrics)."""
+    if results.get("per_school_year_breakdown"):
+        return len(results["per_school_year_breakdown"])
+    if results.get("per_school_year_metrics"):
+        return len(results["per_school_year_metrics"])
+    return 0
+
+
+def _cumulative_over_label(n: int) -> str:
+    """e.g. 'Cumulative over 3 years' / 'Cumulative over 1 year'."""
+    if n <= 0:
+        return "Cumulative (all school years in file)"
+    if n == 1:
+        return "Cumulative over 1 year"
+    return f"Cumulative over {n} years"
+
+
+def _yr_avg_table_label(n: int) -> str:
+    """Row label for average row in tables, e.g. '3-Yr Avg'."""
+    if n <= 0:
+        return "Avg"
+    return f"{n}-Yr Avg"
+
+
+def _yr_avg_breakdown_label(n: int) -> str:
+    """Breakdown table row, e.g. '3 yr Avg' (matches prior '5 yr Avg' style)."""
+    if n <= 0:
+        return "Avg"
+    return f"{n} yr Avg"
+
+
 def _style():
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="Section", fontSize=12, spaceAfter=6))
@@ -58,7 +90,8 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
     story.append(t)
     story.append(Spacer(1, 0.25 * inch))
 
-    pdf_avg_metrics = None  # 5-yr average from breakdown; used for Coverage/High Claimant/Premium so PDF matches website
+    pdf_avg_metrics = None  # average from breakdown; used for Coverage/High Claimant/Premium so PDF matches website
+    pdf_avg_n_years = 0  # school years counted in that average (for labels)
 
     # Per-school-year metrics (if present)
     if results.get("per_school_year_metrics"):
@@ -70,13 +103,13 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
         for sy in sorted_sy:
             m = psm[sy]
             rows.append([str(sy), str(m["total_staff"]), f"{m['total_absences']:,.2f}", f"{m['total_replacement_cost']:,.2f}"])
-        # 5-year average row
+        # Average row (label matches number of years in report)
         n_years = len(sorted_sy)
         if n_years > 0:
             avg_staff = sum(psm[sy]["total_staff"] for sy in sorted_sy) / n_years
             avg_absences = sum(psm[sy]["total_absences"] for sy in sorted_sy) / n_years
             avg_rc = sum(psm[sy]["total_replacement_cost"] for sy in sorted_sy) / n_years
-            rows.append(["5-Yr Avg", f"{avg_staff:,.1f}", f"{avg_absences:,.2f}", f"{avg_rc:,.2f}"])
+            rows.append([_yr_avg_table_label(n_years), f"{avg_staff:,.1f}", f"{avg_absences:,.2f}", f"{avg_rc:,.2f}"])
         t = Table(rows, colWidths=[1.2 * inch, 1 * inch, 1.2 * inch, 1.8 * inch])
         style_list = [
             ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
@@ -88,9 +121,13 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
         t.setStyle(TableStyle(style_list))
         story.append(t)
         story.append(Spacer(1, 0.2 * inch))
-        overall = f"Overall (Cumulative over 5 years): {results.get('overall_total_staff', 0):,} staff, {results.get('overall_total_absences', 0):,.2f} absences, ${results.get('overall_total_replacement_cost', 0):,.2f} total replacement cost"
+        cum = _cumulative_over_label(n_years)
+        overall = f"Overall ({cum}): {results.get('overall_total_staff', 0):,} staff, {results.get('overall_total_absences', 0):,.2f} absences, ${results.get('overall_total_replacement_cost', 0):,.2f} total replacement cost"
         story.append(Paragraph(overall, styles["Body"]))
-        story.append(Paragraph("(Cumulative = sum across all school years; 5-Yr Avg = average per year.)", styles["Body"]))
+        story.append(Paragraph(
+            f"(Cumulative = sum across all school years; {_yr_avg_table_label(n_years)} = average per year.)",
+            styles["Body"],
+        ))
         story.append(Spacer(1, 0.25 * inch))
 
     # Calculation breakdown by school year (if present)
@@ -115,7 +152,7 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
                 f"{b.get('abcover_commission', 0):,.2f}",
                 f"{b['premium']:,.2f}",
             ])
-        # 5 yr Avg row
+        # Average across school years in report (row label uses actual count)
         n_b = len(sorted_breakdown_sy)
         if n_b > 0:
             avg_b = {
@@ -131,8 +168,9 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
                 "premium": sum(breakdown[sy]["premium"] for sy in sorted_breakdown_sy) / n_b,
             }
             pdf_avg_metrics = avg_b
+            pdf_avg_n_years = n_b
             rows.append([
-                "5 yr Avg",
+                _yr_avg_breakdown_label(n_b),
                 f"{avg_b['total_teachers']:,.1f}",
                 f"{avg_b['below_deductible']:,.1f}",
                 f"{avg_b['in_cc_range']:,.1f}",
@@ -160,13 +198,15 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
         story.append(t)
         story.append(Spacer(1, 0.25 * inch))
 
-    # Coverage metrics (use 5-yr average when available so PDF matches website)
+    # Coverage metrics (use per-year average when breakdown exists so PDF matches website)
     story.append(Paragraph("Coverage Metrics", styles["Heading2"]))
     if pdf_avg_metrics is not None:
+        ny = pdf_avg_n_years or _n_school_years_in_report(results)
+        lbl = f"{ny}-yr avg" if ny else "avg"
         story.append(Paragraph(
-            f"Staff in CC Range (5-yr avg): {pdf_avg_metrics['in_cc_range']:,.1f}  |  "
-            f"Total CC Days (5-yr avg): {pdf_avg_metrics['total_cc_days']:,.2f}  |  "
-            f"Replacement Cost × CC Days (5-yr avg): ${pdf_avg_metrics['replacement_cost_cc']:,.2f}",
+            f"Staff in CC Range ({lbl}): {pdf_avg_metrics['in_cc_range']:,.1f}  |  "
+            f"Total CC Days ({lbl}): {pdf_avg_metrics['total_cc_days']:,.2f}  |  "
+            f"Replacement Cost × CC Days ({lbl}): ${pdf_avg_metrics['replacement_cost_cc']:,.2f}",
             styles["Body"]
         ))
     else:
@@ -178,14 +218,16 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
         ))
     story.append(Spacer(1, 0.15 * inch))
 
-    # High claimant metrics (use 5-yr average when available)
+    # High claimant metrics (use per-year average when available)
     story.append(Paragraph("High Claimant Metrics", styles["Heading2"]))
     if pdf_avg_metrics is not None:
         hc_cost_avg = pdf_avg_metrics["excess_days"] * replacement_cost
+        ny = pdf_avg_n_years or _n_school_years_in_report(results)
+        lbl = f"{ny}-yr avg" if ny else "avg"
         story.append(Paragraph(
-            f"High Claimant Staff (5-yr avg): {pdf_avg_metrics['high_claimant']:,.1f}  |  "
-            f"Excess Days (5-yr avg): {pdf_avg_metrics['excess_days']:,.2f}  |  "
-            f"High Claimant Cost (5-yr avg): ${hc_cost_avg:,.2f}",
+            f"High Claimant Staff ({lbl}): {pdf_avg_metrics['high_claimant']:,.1f}  |  "
+            f"Excess Days ({lbl}): {pdf_avg_metrics['excess_days']:,.2f}  |  "
+            f"High Claimant Cost ({lbl}): ${hc_cost_avg:,.2f}",
             styles["Body"]
         ))
     else:
@@ -197,14 +239,21 @@ def build_results_pdf(results: dict, rating_inputs: dict) -> bytes:
         ))
     story.append(Spacer(1, 0.25 * inch))
 
-    # Premium calculation (based on 5-yr average when breakdown exists, so PDF matches website)
+    # Premium calculation (based on per-year average when breakdown exists, so PDF matches website)
     story.append(Paragraph("Premium Calculation", styles["Heading2"]))
     if pdf_avg_metrics is not None:
         rc_cc = pdf_avg_metrics["replacement_cost_cc"]
         ark = pdf_avg_metrics["ark_commission"]
         abcover = pdf_avg_metrics["abcover_commission"]
         total = pdf_avg_metrics["premium"]
-        story.append(Paragraph("Based on 5-year average.", styles["Body"]))
+        ny = pdf_avg_n_years or _n_school_years_in_report(results)
+        if ny == 1:
+            prem_note = "Based on 1-year average."
+        elif ny > 1:
+            prem_note = f"Based on {ny}-year average."
+        else:
+            prem_note = "Based on per-year average."
+        story.append(Paragraph(prem_note, styles["Body"]))
     else:
         rc_cc = results.get("replacement_cost_cc", 0)
         ark = results.get("ark_commission", 0)

@@ -15,7 +15,12 @@ from agents import LangGraphOrchestrator, AgentState, DataAnalysisAgent
 from agents.data_cleaning_agent_llm import run_validation
 from auth import init_db, check_credentials, create_user
 from audit import setup_logging, init_audit_db, init_login_events_db, get_logger, log_run, log_error, log_login_success, log_login_failure, log_logout
-from pdf_export import build_results_pdf
+from pdf_export import (
+    build_results_pdf,
+    _cumulative_over_label,
+    _yr_avg_breakdown_label,
+    _yr_avg_table_label,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -926,7 +931,7 @@ if st.session_state.agent_state.get("rating_results"):
             avg_absences = total_absences_sum / school_year_count
             avg_replacement_cost = total_replacement_cost_sum / school_year_count
             table_data.append({
-                "School Year": "5-Yr Avg",
+                "School Year": _yr_avg_table_label(school_year_count),
                 "Total # Of Staff": f"{avg_staff:,.1f}",
                 "Total # of Absences": f"{avg_absences:,.1f}",
                 "Replacement Cost Per Day ($)": f"${replacement_cost:.2f}",
@@ -937,7 +942,8 @@ if st.session_state.agent_state.get("rating_results"):
             })
         
         st.dataframe(_dataframe_safe_for_display(pd.DataFrame(table_data)), width="stretch", hide_index=True)
-        st.info(f"📊 **Overall (Cumulative over 5 years):** {results.get('overall_total_staff', 0):,} staff, {results.get('overall_total_absences', 0):,.2f} absences, ${results.get('overall_total_replacement_cost', 0):,.2f} total replacement cost")
+        _cum = _cumulative_over_label(school_year_count)
+        st.info(f"📊 **Overall ({_cum}):** {results.get('overall_total_staff', 0):,} staff, {results.get('overall_total_absences', 0):,.2f} absences, ${results.get('overall_total_replacement_cost', 0):,.2f} total replacement cost")
         with st.expander("❓ How are these numbers calculated? How do I verify?"):
             st.markdown("""
             **Total # of Absences** (per school year) is the **sum of absence days** in cleaned data for that year, not the number of rows.
@@ -947,7 +953,7 @@ if st.session_state.agent_state.get("rating_results"):
             **How to verify the table:**
             - For any row: **Total # of Absences × Replacement Cost Per Day** should equal **Total Replacement Cost to District**.
             - Example: 14,683.79 × $132.30 ≈ $1,942,664.98 ✓
-            - **Overall (Cumulative)** = sum across all school years; **5-Yr Avg** = average per year.
+            - **Overall (Cumulative)** = sum across all school years; the **average row** = average per year (label matches number of years in the file).
             """)
         st.markdown("---")
     
@@ -1017,7 +1023,7 @@ if st.session_state.agent_state.get("rating_results"):
                     'premium': sum_premium / n_years,
                 }
                 by_year_rows.append({
-                    "School Year": "5 yr Avg",
+                    "School Year": _yr_avg_breakdown_label(n_years),
                     "Total Teachers": f"{avg_metrics['total_teachers']:,.1f}",
                     "Below Deductible": f"{avg_metrics['below_deductible']:,.1f}",
                     "In CC Range": f"{avg_metrics['in_cc_range']:,.1f}",
