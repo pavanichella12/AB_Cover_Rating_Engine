@@ -173,7 +173,7 @@ with st.sidebar:
     _provider = (os.getenv("LLM_PROVIDER") or "google").strip().lower()
     _model = (os.getenv("LLM_MODEL") or "").strip() or None
     if _provider == "bedrock":
-        st.caption("🤖 **LLM:** Bedrock / Claude 3.5 Sonnet")
+        st.caption("🤖 **LLM:** Bedrock / Claude (see LLM_MODEL / BEDROCK_MODEL_ID)")
     elif _provider == "anthropic":
         st.caption(f"🤖 **LLM:** Anthropic / {_model or 'Claude'}")
     elif _provider == "openai":
@@ -198,6 +198,27 @@ if "_column_mapping_cache" not in st.session_state:
 # Orchestrator is created lazily (only when we have uploaded data) so the first page load is fast.
 if 'orchestrator' not in st.session_state:
     st.session_state.orchestrator = None
+
+
+def _llm_env_fingerprint() -> tuple:
+    """Values that affect Bedrock/OpenAI/etc. client construction — recreate orchestrator if any change."""
+    return (
+        (os.getenv("LLM_PROVIDER") or "").strip().lower(),
+        (os.getenv("LLM_MODEL") or "").strip(),
+        (os.getenv("BEDROCK_MODEL_ID") or "").strip(),
+        (os.getenv("AWS_REGION") or "").strip(),
+    )
+
+
+def _get_orchestrator() -> LangGraphOrchestrator:
+    """Return orchestrator, rebuilding it if LLM-related env changed (e.g. after editing .env or ECS redeploy)."""
+    fp = _llm_env_fingerprint()
+    if st.session_state.orchestrator is not None and st.session_state.get("_orchestrator_llm_fp") != fp:
+        st.session_state.orchestrator = None
+    if st.session_state.orchestrator is None:
+        st.session_state.orchestrator = LangGraphOrchestrator()
+        st.session_state._orchestrator_llm_fp = fp
+    return st.session_state.orchestrator
 
 # Initialize state (blackboard)
 if 'agent_state' not in st.session_state:
@@ -261,9 +282,7 @@ if uploaded_file is not None:
     # Process file upload using orchestrator
     with st.spinner("Uploading and processing file..."):
         try:
-            # Lazy-init orchestrator (and Bedrock/LLM) only when first needed
-            if st.session_state.orchestrator is None:
-                st.session_state.orchestrator = LangGraphOrchestrator()
+            _get_orchestrator()
             # Update state with uploaded file
             st.session_state.agent_state["uploaded_file"] = uploaded_file
             # Run upload node
@@ -558,8 +577,7 @@ if not st.session_state.agent_state["raw_data"].empty:
         # Run select node
         with st.spinner("Selecting data..."):
             try:
-                if st.session_state.orchestrator is None:
-                    st.session_state.orchestrator = LangGraphOrchestrator()
+                _get_orchestrator()
                 select_state = st.session_state.agent_state.copy()
                 select_result = st.session_state.orchestrator._select_node(select_state)
                 st.session_state.agent_state.update(select_result)
@@ -644,8 +662,7 @@ if not st.session_state.agent_state["selected_data"].empty:
         with st.spinner(f"🤖 Calling {_llm_label} — analyzing data and cleaning rules (may take 1–2 min)..."):
             try:
                 # Run clean node (LLM-powered)
-                if st.session_state.orchestrator is None:
-                    st.session_state.orchestrator = LangGraphOrchestrator()
+                _get_orchestrator()
                 clean_state = st.session_state.agent_state.copy()
                 clean_result = st.session_state.orchestrator._clean_node(clean_state)
                 st.session_state.agent_state.update(clean_result)
@@ -720,9 +737,11 @@ if not st.session_state.agent_state["selected_data"].empty:
                     bd = os.getenv("BEDROCK_MODEL_ID") or "(not set)"
                     reg = os.getenv("AWS_REGION") or "(not set)"
                     st.warning(
-                        "**Bedrock rejected the model ID.** What the **running container** sees is shown below. "
-                        "If `BEDROCK_MODEL_ID` is set, it overrides `LLM_MODEL`. "
-                        "IDs like `...20241022-v2:0` are often retired — open **Bedrock → Model catalog** → your model → copy the **current** inference profile or model ID, update **ECS task definition**, then **force new deployment**."
+                        "**Bedrock rejected the model ID.** Values below are what this process sees. "
+                        "`BEDROCK_MODEL_ID` overrides `LLM_MODEL` if set. "
+                        "Claude 3.5 inference profiles are deprecated; use a **current** id from **Bedrock → Model catalog** (e.g. US inference profile `us.anthropic.claude-sonnet-4-5-20250929-v1:0`). "
+                        "In **Bedrock → Model access**, ensure that model is **enabled** for your account. "
+                        "After changing ECS env, **force new deployment** and hard-refresh the app."
                     )
                     st.code(
                         f"LLM_MODEL={lm}\nBEDROCK_MODEL_ID={bd}\nAWS_REGION={reg}",
@@ -778,8 +797,7 @@ if not st.session_state.agent_state["cleaned_data"].empty:
         with st.spinner(f"🤖 Calling {_llm_label_calc} — reasoning about calculations (may take 1–2 min)..."):
             try:
                 # Run calculate node (LLM-powered)
-                if st.session_state.orchestrator is None:
-                    st.session_state.orchestrator = LangGraphOrchestrator()
+                _get_orchestrator()
                 calc_state = st.session_state.agent_state.copy()
                 calc_result = st.session_state.orchestrator._calculate_node(calc_state)
                 st.session_state.agent_state.update(calc_result)
