@@ -17,6 +17,7 @@ on:
       - 'docker/**'
       - 'requirements.txt'
       - 'abcover_logo.png'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:  # Deploy anytime: Actions → Build and Deploy to ECS → Run workflow
 
 env:
@@ -24,7 +25,8 @@ env:
   ECR_PUBLIC_REGISTRY: public.ecr.aws/g8m5c8i1
   ECR_IMAGE: public.ecr.aws/g8m5c8i1/abcover
   ECS_CLUSTER: abcover-cluster
-  ECS_SERVICE: abcover-app-service-xnu4i50r
+  # Must match the ECS service name in AWS (update if you rename/recreate the service)
+  ECS_SERVICE: abcover-app-service-2g83111l
 
 jobs:
   build-and-deploy:
