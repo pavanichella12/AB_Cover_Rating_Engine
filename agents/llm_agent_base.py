@@ -35,9 +35,9 @@ load_dotenv()
 _LLM_LOGGER = logging.getLogger("abcover.llm")
 
 # Bedrock Converse requires a foundation model ID or inference profile ID (see Bedrock console → Model catalog).
-# Default: US cross-region inference profile for Claude Sonnet 4.5 (3.5 Sonnet profiles are deprecated — see AWS migration blog).
-# Override with BEDROCK_MODEL_ID or LLM_MODEL if your region/account uses a different id.
-_DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+# Default: Claude Sonnet 4 foundation model in-region (use us.anthropic.... cross-region profile if you prefer CRIS).
+# Override with BEDROCK_MODEL_ID or LLM_MODEL.
+_DEFAULT_BEDROCK_MODEL_ID = "anthropic.claude-sonnet-4-20250514-v1:0"
 
 
 def _resolve_bedrock_model_id(model_name: Optional[str]) -> str:

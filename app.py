@@ -739,7 +739,7 @@ if not st.session_state.agent_state["selected_data"].empty:
                     st.warning(
                         "**Bedrock rejected the model ID.** Values below are what this process sees. "
                         "`BEDROCK_MODEL_ID` overrides `LLM_MODEL` if set. "
-                        "Claude 3.5 inference profiles are deprecated; use a **current** id from **Bedrock → Model catalog** (e.g. US inference profile `us.anthropic.claude-sonnet-4-5-20250929-v1:0`). "
+                        "Claude 3.5 inference profiles are deprecated; use a **current** id from **Bedrock → Model catalog** (e.g. foundation `anthropic.claude-sonnet-4-20250514-v1:0` or matching `us.anthropic....` profile). "
                         "In **Bedrock → Model access**, ensure that model is **enabled** for your account. "
                         "After changing ECS env, **force new deployment** and hard-refresh the app."
                     )
