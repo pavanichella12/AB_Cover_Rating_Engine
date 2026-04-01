@@ -25,8 +25,9 @@ env:
   ECR_PUBLIC_REGISTRY: public.ecr.aws/g8m5c8i1
   ECR_IMAGE: public.ecr.aws/g8m5c8i1/abcover
   ECS_CLUSTER: abcover-cluster
-  # Must match the ECS service name in AWS (update if you rename/recreate the service)
-  ECS_SERVICE: abcover-app-service-2g83111l
+  # ECS service name: set repo variable ECS_SERVICE (Settings → Secrets and variables → Actions → Variables)
+  # Must match exactly: AWS Console → ECS → Clusters → abcover-cluster → Services → copy the service name
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
 
 jobs:
   build-and-deploy:
@@ -41,6 +42,14 @@ jobs:
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then echo "::error::Repository secret 'AWS_ACCESS_KEY_ID' is not set. Add it in Settings → Secrets and variables → Actions."; exit 1; fi
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then echo "::error::Repository secret 'AWS_SECRET_ACCESS_KEY' is not set. Add it in Settings → Secrets and variables → Actions."; exit 1; fi
           echo "Secrets are set."
+
+      - name: Check ECS_SERVICE variable
+        run: |
+          if [ -z "${{ vars.ECS_SERVICE }}" ]; then
+            echo "::error::Set repository variable ECS_SERVICE to your ECS service name (exact string from AWS). GitHub → this repo → Settings → Secrets and variables → Actions → Variables → New repository variable."
+            exit 1
+          fi
+          echo "ECS_SERVICE is set."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
