@@ -714,6 +714,20 @@ if not st.session_state.agent_state["selected_data"].empty:
                     rows_raw=len(raw) if raw is not None and hasattr(raw, "__len__") else None,
                     rows_selected=len(sel) if sel is not None and hasattr(sel, "__len__") else None)
                 st.error(f"❌ Cleaning error: {str(e)}")
+                err_s = str(e).lower()
+                if "validationexception" in err_s or "model identifier" in err_s:
+                    lm = os.getenv("LLM_MODEL") or "(not set)"
+                    bd = os.getenv("BEDROCK_MODEL_ID") or "(not set)"
+                    reg = os.getenv("AWS_REGION") or "(not set)"
+                    st.warning(
+                        "**Bedrock rejected the model ID.** What the **running container** sees is shown below. "
+                        "If `BEDROCK_MODEL_ID` is set, it overrides `LLM_MODEL`. "
+                        "IDs like `...20241022-v2:0` are often retired — open **Bedrock → Model catalog** → your model → copy the **current** inference profile or model ID, update **ECS task definition**, then **force new deployment**."
+                    )
+                    st.code(
+                        f"LLM_MODEL={lm}\nBEDROCK_MODEL_ID={bd}\nAWS_REGION={reg}",
+                        language="text",
+                    )
 
 # ============================================================================
 # STEP 4: RATING ENGINE CALCULATOR (LLM-Powered)
