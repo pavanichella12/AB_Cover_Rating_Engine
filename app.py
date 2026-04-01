@@ -732,14 +732,19 @@ if not st.session_state.agent_state["selected_data"].empty:
                     rows_selected=len(sel) if sel is not None and hasattr(sel, "__len__") else None)
                 st.error(f"❌ Cleaning error: {str(e)}")
                 err_s = str(e).lower()
-                if "validationexception" in err_s or "model identifier" in err_s:
+                if (
+                    "validationexception" in err_s
+                    or "model identifier" in err_s
+                    or "inference profile" in err_s
+                    or "on-demand throughput" in err_s
+                ):
                     lm = os.getenv("LLM_MODEL") or "(not set)"
                     bd = os.getenv("BEDROCK_MODEL_ID") or "(not set)"
                     reg = os.getenv("AWS_REGION") or "(not set)"
                     st.warning(
                         "**Bedrock rejected the model ID.** Values below are what this process sees. "
                         "`BEDROCK_MODEL_ID` overrides `LLM_MODEL` if set. "
-                        "Use an **inference profile** id (`us.anthropic....`) from **Bedrock → Model catalog** — bare `anthropic....` foundation ids often fail with *on-demand throughput isn't supported*. "
+                        "Use an **inference profile** id (`us.anthropic....`) — **not** the foundation id (`anthropic....`). Example: replace `anthropic.claude-sonnet-4-20250514-v1:0` with **`us.anthropic.claude-sonnet-4-20250514-v1:0`**. Copy the exact **Inference profile** string from **Bedrock → Model catalog** if unsure. "
                         "In **Bedrock → Model access**, ensure that model is **enabled** for your account. "
                         "After changing ECS env, **force new deployment** and hard-refresh the app."
                     )
