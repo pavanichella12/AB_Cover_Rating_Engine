@@ -34,10 +34,10 @@ load_dotenv()
 # Observability: log LLM calls (prompt length, response length, duration, token usage if available)
 _LLM_LOGGER = logging.getLogger("abcover.llm")
 
-# Bedrock Converse requires a foundation model ID or inference profile ID (see Bedrock console → Model catalog).
-# Default: Claude Sonnet 4 foundation model in-region (use us.anthropic.... cross-region profile if you prefer CRIS).
-# Override with BEDROCK_MODEL_ID or LLM_MODEL.
-_DEFAULT_BEDROCK_MODEL_ID = "anthropic.claude-sonnet-4-20250514-v1:0"
+# Bedrock Converse: many accounts require a US *inference profile* id (us.anthropic....), not a bare
+# foundation model id — otherwise "on-demand throughput isn't supported; use an inference profile".
+# Copy the exact "Inference profile" id from Bedrock → Model catalog → model detail (us-east-1).
+_DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
 def _resolve_bedrock_model_id(model_name: Optional[str]) -> str:
