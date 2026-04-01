@@ -34,6 +34,41 @@ load_dotenv()
 # Observability: log LLM calls (prompt length, response length, duration, token usage if available)
 _LLM_LOGGER = logging.getLogger("abcover.llm")
 
+# Bedrock Converse requires a foundation model ID or inference profile ID (see Bedrock console → Model catalog).
+# Default: US cross-region inference profile for Claude 3.5 Sonnet (if your account/region differ, set BEDROCK_MODEL_ID or LLM_MODEL).
+_DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+
+def _resolve_bedrock_model_id(model_name: Optional[str]) -> str:
+    """
+    Return a valid Bedrock modelId. If LLM_MODEL is set for another provider (e.g. gemini-*),
+    ignore it and use BEDROCK_MODEL_ID or the default — mixed config causes ValidationException.
+    """
+    explicit = (os.getenv("BEDROCK_MODEL_ID") or "").strip()
+    if explicit:
+        return explicit
+
+    raw = (model_name or "").strip()
+    if not raw:
+        return _DEFAULT_BEDROCK_MODEL_ID
+
+    lower = raw.lower()
+    # Clearly not a Bedrock identifier (common when LLM_PROVIDER was switched without updating LLM_MODEL)
+    if (
+        "gemini" in lower
+        or "gpt-" in lower
+        or lower.startswith("text-embedding")
+        or (lower.startswith("claude-") and "anthropic." not in lower)
+    ):
+        _LLM_LOGGER.warning(
+            "LLM_MODEL=%r is not a Bedrock model ID; using %s (set BEDROCK_MODEL_ID or LLM_MODEL to your Bedrock model).",
+            raw,
+            _DEFAULT_BEDROCK_MODEL_ID,
+        )
+        return _DEFAULT_BEDROCK_MODEL_ID
+
+    return raw
+
 
 class LLMAgentBase(ABC):
     """
@@ -97,8 +132,8 @@ class LLMAgentBase(ABC):
                     "langchain-aws is required for Bedrock. Install with: pip install langchain-aws"
                 )
             region = (os.getenv("AWS_REGION") or "").strip() or "us-east-1"
-            # Use inference profile ID (us.*) for on-demand; raw model ID causes ValidationException
-            model_id = model_name or "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+            model_id = _resolve_bedrock_model_id(model_name)
+            _LLM_LOGGER.info("Bedrock ChatBedrockConverse model_id=%s region=%s", model_id, region)
             return ChatBedrockConverse(
                 model=model_id,
                 temperature=0.3,
